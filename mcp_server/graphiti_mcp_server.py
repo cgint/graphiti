@@ -12,21 +12,27 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any, TypedDict, cast
 
-from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
-from openai import AsyncAzureOpenAI
 from pydantic import BaseModel, Field
 
 from graphiti_core import Graphiti
 from graphiti_core.edges import EntityEdge
-from graphiti_core.embedder.azure_openai import AzureOpenAIEmbedderClient
 from graphiti_core.embedder.client import EmbedderClient
 from graphiti_core.embedder.openai import OpenAIEmbedder, OpenAIEmbedderConfig
 from graphiti_core.llm_client import LLMClient
-from graphiti_core.llm_client.azure_openai_client import AzureOpenAILLMClient
 from graphiti_core.llm_client.config import LLMConfig
 from graphiti_core.llm_client.openai_client import OpenAIClient
+
+# Optional Azure imports - only needed if using Azure OpenAI
+try:
+    from azure.identity import DefaultAzureCredential, get_bearer_token_provider
+    from openai import AsyncAzureOpenAI
+    from graphiti_core.embedder.azure_openai import AzureOpenAIEmbedderClient
+    from graphiti_core.llm_client.azure_openai_client import AzureOpenAILLMClient
+    AZURE_AVAILABLE = True
+except ImportError:
+    AZURE_AVAILABLE = False
 from graphiti_core.nodes import EpisodeType, EpisodicNode
 from graphiti_core.search.search_config_recipes import (
     NODE_HYBRID_SEARCH_NODE_DISTANCE,
@@ -163,6 +169,8 @@ class StatusResponse(TypedDict):
 
 
 def create_azure_credential_token_provider() -> Callable[[], str]:
+    if not AZURE_AVAILABLE:
+        raise ImportError("Azure dependencies not available. Install azure-identity to use Azure OpenAI.")
     credential = DefaultAzureCredential()
     token_provider = get_bearer_token_provider(
         credential, 'https://cognitiveservices.azure.com/.default'
@@ -292,6 +300,9 @@ class GraphitiLLMConfig(BaseModel):
 
         if self.azure_openai_endpoint is not None:
             # Azure OpenAI API setup
+            if not AZURE_AVAILABLE:
+                raise ImportError("Azure dependencies not available. Install azure-identity and azure-openai to use Azure OpenAI.")
+            
             if self.azure_openai_use_managed_identity:
                 # Use managed identity for authentication
                 token_provider = create_azure_credential_token_provider()
@@ -406,6 +417,10 @@ class GraphitiEmbedderConfig(BaseModel):
     def create_client(self) -> EmbedderClient | None:
         if self.azure_openai_endpoint is not None:
             # Azure OpenAI API setup
+            if not AZURE_AVAILABLE:
+                logger.error("Azure dependencies not available. Install azure-identity and azure-openai to use Azure OpenAI.")
+                return None
+                
             if self.azure_openai_use_managed_identity:
                 # Use managed identity for authentication
                 token_provider = create_azure_credential_token_provider()

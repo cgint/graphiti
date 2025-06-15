@@ -37,7 +37,7 @@ services:
       - MODEL_NAME=${MODEL_NAME}
       - PATH=/root/.local/bin:${PATH}
     ports:
-      - "8000:8000" # Expose the MCP server via HTTP for SSE transport
+      - "8667:8000" # Expose the MCP server via HTTP for SSE transport
     command: ["uv", "run", "graphiti_mcp_server.py", "--transport", "sse"]
 
 volumes:
