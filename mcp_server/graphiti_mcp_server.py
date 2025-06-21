@@ -129,6 +129,38 @@ ENTITY_TYPES: dict[str, BaseModel] = {
 }
 
 
+def ensure_no_embeddings(data: dict[str, Any]) -> dict[str, Any]:
+    """Utility function to ensure embeddings are never exposed in MCP responses.
+    
+    This provides an additional safety layer to prevent fact_embedding, name_embedding,
+    summary_embedding, or any other embedding fields from being accidentally returned in responses.
+    
+    Args:
+        data: Dictionary that might contain embedding data
+        
+    Returns:
+        Dictionary with all embedding fields removed
+    """
+    # List of all known embedding fields that should never be exposed
+    embedding_fields = [
+        'fact_embedding',      # Entity edge fact embeddings
+        'name_embedding',      # Entity node name embeddings  
+        'summary_embedding',   # Entity node summary embeddings
+        'embedding',           # Generic embedding field
+    ]
+    
+    # Remove any embedding fields that might be present
+    for field in embedding_fields:
+        data.pop(field, None)
+    
+    # Also remove any field that ends with '_embedding' as a catch-all
+    keys_to_remove = [key for key in data.keys() if key.endswith('_embedding')]
+    for key in keys_to_remove:
+        data.pop(key, None)
+    
+    return data
+
+
 # Type definitions for API responses
 class ErrorResponse(TypedDict):
     error: str
@@ -636,6 +668,10 @@ def format_fact_result(edge: EntityEdge) -> dict[str, Any]:
     """Format an entity edge into a readable result.
 
     Since EntityEdge is a Pydantic BaseModel, we can use its built-in serialization capabilities.
+    
+    IMPORTANT: This function explicitly excludes ALL embedding fields to prevent large embedding 
+    vectors from being returned in responses, which would consume unnecessary context space 
+    and provide no value to the caller.
 
     Args:
         edge: The EntityEdge to format
@@ -643,12 +679,19 @@ def format_fact_result(edge: EntityEdge) -> dict[str, Any]:
     Returns:
         A dictionary representation of the edge with serialized dates and excluded embeddings
     """
-    return edge.model_dump(
+    result = edge.model_dump(
         mode='json',
         exclude={
-            'fact_embedding',
+            'fact_embedding',      # Entity edge fact embeddings
+            'name_embedding',      # Entity node name embeddings (if present)
+            'summary_embedding',   # Entity node summary embeddings (if present)
         },
     )
+    
+    # Additional safety: use utility function to ensure no embeddings leak through
+    result = ensure_no_embeddings(result)
+    
+    return result
 
 
 # Dictionary to store queues for each group_id
@@ -890,9 +933,9 @@ async def search_memory_nodes(
         if not search_results.nodes:
             return NodeSearchResponse(message='No relevant nodes found', nodes=[])
 
-        # Format the node results
+        # Format the node results - ensure no embeddings are exposed
         formatted_nodes: list[NodeResult] = [
-            {
+            cast(NodeResult, ensure_no_embeddings({
                 'uuid': node.uuid,
                 'name': node.name,
                 'summary': node.summary if hasattr(node, 'summary') else '',
@@ -900,7 +943,7 @@ async def search_memory_nodes(
                 'group_id': node.group_id,
                 'created_at': node.created_at.isoformat(),
                 'attributes': node.attributes if hasattr(node, 'attributes') else {},
-            }
+            }))
             for node in search_results.nodes
         ]
 
@@ -1089,8 +1132,8 @@ async def get_episodes(
 
         # Use Pydantic's model_dump method for EpisodicNode serialization
         formatted_episodes = [
-            # Use mode='json' to handle datetime serialization
-            episode.model_dump(mode='json')
+            # Use mode='json' to handle datetime serialization, then ensure no embeddings
+            ensure_no_embeddings(episode.model_dump(mode='json'))
             for episode in episodes
         ]
 
@@ -1142,8 +1185,8 @@ async def get_status() -> StatusResponse:
         # Use cast to help the type checker understand that graphiti_client is not None
         client = cast(Graphiti, graphiti_client)
 
-        # Test Neo4j connection
-        await client.driver.verify_connectivity()
+        # Test Neo4j connection by running a simple query
+        await client.driver.execute_query('RETURN 1', database_='neo4j')
         return {'status': 'ok', 'message': 'Graphiti MCP server is running and connected to Neo4j'}
     except Exception as e:
         error_msg = str(e)

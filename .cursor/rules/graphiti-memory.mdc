@@ -1,19 +1,14 @@
 ---
-description: Guidelines for using Graphiti MCP memory system (http://localhost:8667/sse).  Use when: storing user preferences/procedures, searching past context,  or when persistent memory across sessions is needed. Contains MCP tool  usage patterns and best practices for building knowledge graph relationships.
+description: 
 globs: 
-alwaysApply: false
+alwaysApply: true
 ---
 # Graphiti MCP Memory System Guidelines
+Guidelines for using Graphiti MCP memory system (http://localhost:8667/sse).
+Use when: storing user preferences/procedures, searching past context, or when persistent memory across sessions is needed. Contains MCP tool  usage patterns and best practices for building knowledge graph relationships.
 
 ## Overview
 This project uses Graphiti MCP server for persistent memory and knowledge graph capabilities. The MCP server is configured at `http://localhost:8667/sse` and stores information in a Neo4j knowledge graph.
-
-## MCP Server Configuration
-The Graphiti MCP server is located in [mcp_server/](mdc:mcp:mcp_server) and can be started with:
-```bash
-cd mcp_server && docker compose up neo4j -d
-uv run graphiti_mcp_server_simple.py --transport sse --group-id cursor-session --use-custom-entities
-```
 
 ## Before Starting Any Task
 
@@ -22,12 +17,19 @@ uv run graphiti_mcp_server_simple.py --transport sse --group-id cursor-session -
 - **Filter by entity type:** Specify `Preference`, `Procedure`, or `Requirement` in your node search to get targeted results
 - **Review all matches:** Carefully examine any preferences, procedures, or facts that match your current task
 
+## What is the purpose of saving in memory - Be mindful when selecting to store specific detail VS an abstracted concept of what you want to save for later
+
+- Saving to memory is **meant to help in the future** in similar situations.
+- So it is very important to focus on a **generalisation of the current specific challenge or aspect**.
+- To make most out of memory in the future, it is important to remember information in the **necessary abstraction** so it can be **applied to future slightly different situations as well**.
+- Please **avoid mentioning very specific situations*** in in your memory, **unless you think this specific information is necessary to guide you in future similar situations**.
+
 ## Always Save New or Updated Information
 
 - **Capture requirements and preferences immediately:** When a user expresses a requirement or preference, use `add_memory` to store it right away
   - _Best practice:_ Split very long requirements into shorter, logical chunks
 - **Be explicit if something is an update to existing knowledge:** Only add what's changed or new to the graph
-- **Document procedures clearly:** When you discover how a user wants things done, record it as a procedure
+- **Document procedures clearly:** When you discover how a user wants things done, record it as a generalised procedure
 - **Record factual relationships:** When you learn about connections between entities, store these as facts
 - **Be specific with categories:** Label preferences and procedures with clear categories for better retrieval later
 

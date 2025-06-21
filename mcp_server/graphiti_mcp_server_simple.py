@@ -81,6 +81,38 @@ ENTITY_TYPES: dict[str, BaseModel] = {
 }
 
 
+def ensure_no_embeddings(data: dict[str, Any]) -> dict[str, Any]:
+    """Utility function to ensure embeddings are never exposed in MCP responses.
+    
+    This provides an additional safety layer to prevent fact_embedding, name_embedding,
+    summary_embedding, or any other embedding fields from being accidentally returned in responses.
+    
+    Args:
+        data: Dictionary that might contain embedding data
+        
+    Returns:
+        Dictionary with all embedding fields removed
+    """
+    # List of all known embedding fields that should never be exposed
+    embedding_fields = [
+        'fact_embedding',      # Entity edge fact embeddings
+        'name_embedding',      # Entity node name embeddings  
+        'summary_embedding',   # Entity node summary embeddings
+        'embedding',           # Generic embedding field
+    ]
+    
+    # Remove any embedding fields that might be present
+    for field in embedding_fields:
+        data.pop(field, None)
+    
+    # Also remove any field that ends with '_embedding' as a catch-all
+    keys_to_remove = [key for key in data.keys() if key.endswith('_embedding')]
+    for key in keys_to_remove:
+        data.pop(key, None)
+    
+    return data
+
+
 # Type definitions for API responses
 class ErrorResponse(TypedDict):
     error: str
@@ -350,13 +382,31 @@ async def initialize_graphiti():
 
 
 def format_fact_result(edge: EntityEdge) -> dict[str, Any]:
-    """Format an entity edge into a readable result."""
-    return edge.model_dump(
+    """Format an entity edge into a readable result.
+    
+    IMPORTANT: This function explicitly excludes ALL embedding fields to prevent large embedding 
+    vectors from being returned in responses, which would consume unnecessary context space 
+    and provide no value to the caller.
+    
+    Args:
+        edge: The EntityEdge to format
+
+    Returns:
+        A dictionary representation of the edge with serialized dates and excluded embeddings
+    """
+    result = edge.model_dump(
         mode='json',
         exclude={
-            'fact_embedding',
+            'fact_embedding',      # Entity edge fact embeddings
+            'name_embedding',      # Entity node name embeddings (if present)
+            'summary_embedding',   # Entity node summary embeddings (if present)
         },
     )
+    
+    # Additional safety: use utility function to ensure no embeddings leak through
+    result = ensure_no_embeddings(result)
+    
+    return result
 
 
 # Dictionary to store queues for each group_id
@@ -501,7 +551,7 @@ async def search_memory_nodes(
             return NodeSearchResponse(message='No relevant nodes found', nodes=[])
 
         formatted_nodes: list[NodeResult] = [
-            {
+            cast(NodeResult, ensure_no_embeddings({
                 'uuid': node.uuid,
                 'name': node.name,
                 'summary': node.summary if hasattr(node, 'summary') else '',
@@ -509,7 +559,7 @@ async def search_memory_nodes(
                 'group_id': node.group_id,
                 'created_at': node.created_at.isoformat(),
                 'attributes': node.attributes if hasattr(node, 'attributes') else {},
-            }
+            }))
             for node in search_results.nodes
         ]
 

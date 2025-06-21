@@ -92,7 +92,7 @@ You can set these variables in a `.env` file in the project directory.
 To run the Graphiti MCP server directly using `uv`:
 
 ```bash
-uv run graphiti_mcp_server.py
+
 ```
 
 With options:
