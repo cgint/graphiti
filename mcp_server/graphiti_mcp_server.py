@@ -33,7 +33,7 @@ try:
     AZURE_AVAILABLE = True
 except ImportError:
     AZURE_AVAILABLE = False
-from graphiti_core.nodes import EpisodeType, EpisodicNode
+from graphiti_core.nodes import EpisodeType, EpisodicNode, EntityNode
 from graphiti_core.search.search_config_recipes import (
     NODE_HYBRID_SEARCH_NODE_DISTANCE,
     NODE_HYBRID_SEARCH_RRF,
@@ -996,7 +996,47 @@ async def search_memory_facts(
         if not relevant_edges:
             return {'message': 'No relevant facts found', 'facts': []}
 
-        facts = [format_fact_result(edge) for edge in relevant_edges]
+        # Extract unique node UUIDs from edges to look up their names
+        node_uuids = set()
+        for edge in relevant_edges:
+            if hasattr(edge, 'source_node_uuid') and edge.source_node_uuid:
+                node_uuids.add(edge.source_node_uuid)
+            if hasattr(edge, 'target_node_uuid') and edge.target_node_uuid:
+                node_uuids.add(edge.target_node_uuid)
+
+        # Look up node names using EntityNode.get_by_uuids
+        node_names = {}
+        if node_uuids:
+            try:
+                uuid_list = list(node_uuids)
+                entity_nodes = await EntityNode.get_by_uuids(client.driver, uuid_list)
+                
+                # Map the results
+                for node in entity_nodes:
+                    if hasattr(node, 'uuid') and hasattr(node, 'name'):
+                        node_names[node.uuid] = node.name
+                
+                logger.info(f"Successfully looked up names for {len(node_names)} out of {len(node_uuids)} nodes")
+                
+            except Exception as e:
+                logger.warning(f"Could not look up node names: {e}")
+                # Continue without node names if lookup fails
+
+        # Format facts with node names
+        def format_fact_result_with_names(edge: EntityEdge) -> dict[str, Any]:
+            # Get the base result using the existing function
+            result = format_fact_result(edge)
+            
+            # Add node names
+            source_uuid = edge.source_node_uuid if hasattr(edge, 'source_node_uuid') else ''
+            target_uuid = edge.target_node_uuid if hasattr(edge, 'target_node_uuid') else ''
+            
+            result['source_node_name'] = node_names.get(source_uuid, 'Unknown')
+            result['target_node_name'] = node_names.get(target_uuid, 'Unknown')
+            
+            return result
+
+        facts = [format_fact_result_with_names(edge) for edge in relevant_edges]
         return {'message': 'Facts retrieved successfully', 'facts': facts}
     except Exception as e:
         error_msg = str(e)
