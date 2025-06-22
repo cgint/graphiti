@@ -24,15 +24,15 @@ from graphiti_core.llm_client import LLMClient
 from graphiti_core.llm_client.config import LLMConfig
 from graphiti_core.llm_client.openai_client import OpenAIClient
 
-# Optional Azure imports - only needed if using Azure OpenAI
+# Import new clients for Gemini and Ollama
 try:
-    from azure.identity import DefaultAzureCredential, get_bearer_token_provider
-    from openai import AsyncAzureOpenAI
-    from graphiti_core.embedder.azure_openai import AzureOpenAIEmbedderClient
-    from graphiti_core.llm_client.azure_openai_client import AzureOpenAILLMClient
-    AZURE_AVAILABLE = True
+    from vertex_ai_client import VertexAIClient
+    from ollama_embedder import NonBatchingOllamaEmbedder
+    from ollama_reranker_client import OllamaRerankerClient
+    
+    GEMINI_OLLAMA_AVAILABLE = True
 except ImportError:
-    AZURE_AVAILABLE = False
+    GEMINI_OLLAMA_AVAILABLE = False
 from graphiti_core.nodes import EpisodeType, EpisodicNode, EntityNode
 from graphiti_core.search.search_config_recipes import (
     NODE_HYBRID_SEARCH_NODE_DISTANCE,
@@ -44,9 +44,10 @@ from graphiti_core.utils.maintenance.graph_data_operations import clear_data
 load_dotenv()
 
 
-DEFAULT_LLM_MODEL = 'gpt-4.1-mini'
-SMALL_LLM_MODEL = 'gpt-4.1-nano'
-DEFAULT_EMBEDDER_MODEL = 'text-embedding-3-small'
+# Default models - Using Gemini and Ollama
+DEFAULT_LLM_MODEL = 'gemini-2.5-flash'
+SMALL_LLM_MODEL = 'gemini-2.5-flash'
+DEFAULT_EMBEDDER_MODEL = 'nomic-embed-text'
 
 
 class Requirement(BaseModel):
@@ -222,23 +223,20 @@ def create_azure_credential_token_provider() -> Callable[[], str]:
 # 2. Environment variables (loaded via load_dotenv())
 # 3. Command line arguments (which override environment variables)
 class GraphitiLLMConfig(BaseModel):
-    """Configuration for the LLM client.
+    """Configuration for the Gemini LLM client.
 
-    Centralizes all LLM-specific configuration parameters including API keys and model selection.
+    Centralizes all LLM-specific configuration parameters for Vertex AI Gemini.
     """
 
-    api_key: str | None = None
     model: str = DEFAULT_LLM_MODEL
     small_model: str = SMALL_LLM_MODEL
-    temperature: float = 0.0
-    azure_openai_endpoint: str | None = None
-    azure_openai_deployment_name: str | None = None
-    azure_openai_api_version: str | None = None
-    azure_openai_use_managed_identity: bool = False
+    temperature: float = 0.3
+    project_id: str | None = None
+    location: str = "global"
 
     @classmethod
     def from_env(cls) -> 'GraphitiLLMConfig':
-        """Create LLM configuration from environment variables."""
+        """Create Gemini LLM configuration from environment variables."""
         # Get model from environment, or use default if not set or empty
         model_env = os.environ.get('MODEL_NAME', '')
         model = model_env if model_env.strip() else DEFAULT_LLM_MODEL
@@ -247,55 +245,26 @@ class GraphitiLLMConfig(BaseModel):
         small_model_env = os.environ.get('SMALL_MODEL_NAME', '')
         small_model = small_model_env if small_model_env.strip() else SMALL_LLM_MODEL
 
-        azure_openai_endpoint = os.environ.get('AZURE_OPENAI_ENDPOINT', None)
-        azure_openai_api_version = os.environ.get('AZURE_OPENAI_API_VERSION', None)
-        azure_openai_deployment_name = os.environ.get('AZURE_OPENAI_DEPLOYMENT_NAME', None)
-        azure_openai_use_managed_identity = (
-            os.environ.get('AZURE_OPENAI_USE_MANAGED_IDENTITY', 'false').lower() == 'true'
+        project_id = os.environ.get('GOOGLE_CLOUD_PROJECT')
+        location = os.environ.get('GCP_LOCATION', 'global')
+
+        # Log if empty model was provided
+        if model_env == '':
+            logger.debug(
+                f'MODEL_NAME environment variable not set, using default: {DEFAULT_LLM_MODEL}'
+            )
+        elif not model_env.strip():
+            logger.warning(
+                f'Empty MODEL_NAME environment variable, using default: {DEFAULT_LLM_MODEL}'
+            )
+
+        return cls(
+            model=model,
+            small_model=small_model,
+            temperature=float(os.environ.get('LLM_TEMPERATURE', '0.3')),
+            project_id=project_id,
+            location=location,
         )
-
-        if azure_openai_endpoint is None:
-            # Setup for OpenAI API
-            # Log if empty model was provided
-            if model_env == '':
-                logger.debug(
-                    f'MODEL_NAME environment variable not set, using default: {DEFAULT_LLM_MODEL}'
-                )
-            elif not model_env.strip():
-                logger.warning(
-                    f'Empty MODEL_NAME environment variable, using default: {DEFAULT_LLM_MODEL}'
-                )
-
-            return cls(
-                api_key=os.environ.get('OPENAI_API_KEY'),
-                model=model,
-                small_model=small_model,
-                temperature=float(os.environ.get('LLM_TEMPERATURE', '0.0')),
-            )
-        else:
-            # Setup for Azure OpenAI API
-            # Log if empty deployment name was provided
-            if azure_openai_deployment_name is None:
-                logger.error('AZURE_OPENAI_DEPLOYMENT_NAME environment variable not set')
-
-                raise ValueError('AZURE_OPENAI_DEPLOYMENT_NAME environment variable not set')
-            if not azure_openai_use_managed_identity:
-                # api key
-                api_key = os.environ.get('OPENAI_API_KEY', None)
-            else:
-                # Managed identity
-                api_key = None
-
-            return cls(
-                azure_openai_use_managed_identity=azure_openai_use_managed_identity,
-                azure_openai_endpoint=azure_openai_endpoint,
-                api_key=api_key,
-                azure_openai_api_version=azure_openai_api_version,
-                azure_openai_deployment_name=azure_openai_deployment_name,
-                model=model,
-                small_model=small_model,
-                temperature=float(os.environ.get('LLM_TEMPERATURE', '0.0')),
-            )
 
     @classmethod
     def from_cli_and_env(cls, args: argparse.Namespace) -> 'GraphitiLLMConfig':
@@ -324,78 +293,36 @@ class GraphitiLLMConfig(BaseModel):
         return config
 
     def create_client(self) -> LLMClient:
-        """Create an LLM client based on this configuration.
+        """Create a Vertex AI LLM client based on this configuration.
 
         Returns:
-            LLMClient instance
+            VertexAIClient instance
         """
 
-        if self.azure_openai_endpoint is not None:
-            # Azure OpenAI API setup
-            if not AZURE_AVAILABLE:
-                raise ImportError("Azure dependencies not available. Install azure-identity and azure-openai to use Azure OpenAI.")
-            
-            if self.azure_openai_use_managed_identity:
-                # Use managed identity for authentication
-                token_provider = create_azure_credential_token_provider()
-                return AzureOpenAILLMClient(
-                    azure_client=AsyncAzureOpenAI(
-                        azure_endpoint=self.azure_openai_endpoint,
-                        azure_deployment=self.azure_openai_deployment_name,
-                        api_version=self.azure_openai_api_version,
-                        azure_ad_token_provider=token_provider,
-                    ),
-                    config=LLMConfig(
-                        api_key=self.api_key,
-                        model=self.model,
-                        small_model=self.small_model,
-                        temperature=self.temperature,
-                    ),
-                )
-            elif self.api_key:
-                # Use API key for authentication
-                return AzureOpenAILLMClient(
-                    azure_client=AsyncAzureOpenAI(
-                        azure_endpoint=self.azure_openai_endpoint,
-                        azure_deployment=self.azure_openai_deployment_name,
-                        api_version=self.azure_openai_api_version,
-                        api_key=self.api_key,
-                    ),
-                    config=LLMConfig(
-                        api_key=self.api_key,
-                        model=self.model,
-                        small_model=self.small_model,
-                        temperature=self.temperature,
-                    ),
-                )
-            else:
-                raise ValueError('OPENAI_API_KEY must be set when using Azure OpenAI API')
-
-        if not self.api_key:
-            raise ValueError('OPENAI_API_KEY must be set when using OpenAI API')
+        if not GEMINI_OLLAMA_AVAILABLE:
+            raise ImportError("Gemini/Ollama dependencies not available. Install google-genai to use Vertex AI.")
 
         llm_client_config = LLMConfig(
-            api_key=self.api_key, model=self.model, small_model=self.small_model
+            model=self.model, 
+            small_model=self.small_model,
+            temperature=self.temperature,
         )
 
-        # Set temperature
-        llm_client_config.temperature = self.temperature
-
-        return OpenAIClient(config=llm_client_config)
+        return VertexAIClient(
+            config=llm_client_config,
+            project_id=self.project_id,
+            location=self.location,
+        )
 
 
 class GraphitiEmbedderConfig(BaseModel):
-    """Configuration for the embedder client.
+    """Configuration for the Ollama embedder client.
 
-    Centralizes all embedding-related configuration parameters.
+    Centralizes all embedding-related configuration parameters for Ollama.
     """
 
     model: str = DEFAULT_EMBEDDER_MODEL
-    api_key: str | None = None
-    azure_openai_endpoint: str | None = None
-    azure_openai_deployment_name: str | None = None
-    azure_openai_api_version: str | None = None
-    azure_openai_use_managed_identity: bool = False
+    base_url: str = "http://localhost:11434/v1"
 
     @classmethod
     def from_env(cls) -> 'GraphitiEmbedderConfig':

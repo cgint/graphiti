@@ -17,7 +17,10 @@ COPY pyproject.toml .
 RUN uv sync
 
 # Copy application code
-COPY graphiti_mcp_server.py .
+COPY graphiti_mcp_server_gemini_ollama.py .
+COPY vertex_ai_client.py .
+COPY ollama_embedder.py .
+COPY ollama_reranker_client.py .
 
 EXPOSE 8000
 
@@ -25,4 +28,4 @@ EXPOSE 8000
 ENV PYTHONUNBUFFERED=1
 
 # Command to run the application
-CMD ["uv", "run", "graphiti_mcp_server.py"]
+CMD ["uv", "run", "graphiti_mcp_server_gemini_ollama.py"]

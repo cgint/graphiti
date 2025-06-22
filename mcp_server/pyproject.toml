@@ -1,12 +1,16 @@
 [project]
 name = "mcp-server"
 version = "0.1.0"
-description = "Graphiti MCP Server"
+description = "Graphiti MCP Server with Gemini and Ollama"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "mcp>=1.5.0",
-    "openai>=1.68.2",
     "graphiti-core>=0.11.6",
-    "azure-identity>=1.21.0",
+    "google-genai>=0.4.0",
+    "google-cloud-aiplatform>=1.38.0",
+    "google-api-core>=2.11.0",
+    "aiohttp>=3.8.0",
+    "tenacity>=8.0.0",
+    "python-dotenv>=1.0.0",
 ]
