@@ -68,7 +68,7 @@ class VertexAIClient(LLMClient):
         
         # Initialize client
         self.client = genai.Client()
-        self.model_name = self.config.model or "gemini-2.5-flash"
+        self.model_name = self.config.model or "gemini-2.5-flash-lite-preview-06-17"
 
         print("🚀 VertexAI Client initialized:")
         print(f"   Model: {self.model_name}")

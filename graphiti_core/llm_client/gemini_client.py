@@ -29,7 +29,7 @@ from .errors import RateLimitError
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = 'gemini-2.0-flash'
+DEFAULT_MODEL = 'gemini-2.5-flash-lite-preview-06-17'
 
 
 class GeminiClient(LLMClient):

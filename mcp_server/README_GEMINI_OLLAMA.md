@@ -16,7 +16,7 @@ This directory contains the updated Graphiti MCP server that uses **Gemini (Vert
 - **Before**: Used OpenAI API with `OpenAIClient`
 - **After**: Uses Google Vertex AI with `VertexAIClient`
 - **Configuration**: 
-  - Model: `gemini-2.5-flash` (default)
+  - Model: `gemini-2.5-flash-lite-preview-06-17` (default)
   - Temperature: `0.3` (instead of `0.0`)
   - Environment variables: `GOOGLE_CLOUD_PROJECT`, `GCP_LOCATION`
 
@@ -44,7 +44,7 @@ This directory contains the updated Graphiti MCP server that uses **Gemini (Vert
   # Gemini/Vertex AI
   GOOGLE_CLOUD_PROJECT=your-project-id
   GCP_LOCATION=global
-  MODEL_NAME=gemini-2.5-flash
+  MODEL_NAME=gemini-2.5-flash-lite-preview-06-17
   LLM_TEMPERATURE=0.3
   
   # Ollama

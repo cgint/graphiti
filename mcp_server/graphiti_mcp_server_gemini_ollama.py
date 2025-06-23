@@ -36,8 +36,8 @@ from ollama_reranker_client import OllamaRerankerClient
 
 load_dotenv()
 
-DEFAULT_LLM_MODEL = 'gemini-2.0-flash-exp'
-SMALL_LLM_MODEL = 'gemini-2.0-flash-exp'
+DEFAULT_LLM_MODEL = 'gemini-2.5-flash-lite-preview-06-17'
+SMALL_LLM_MODEL = 'gemini-2.5-flash-lite-preview-06-17'
 DEFAULT_EMBEDDER_MODEL = 'nomic-embed-text'
 
 
@@ -291,7 +291,10 @@ class GraphitiConfig(BaseModel):
             config.group_id = args.group_id
             
         if hasattr(args, 'use_custom_entities'):
+            print(f"DEBUG: use_custom_entities = {args.use_custom_entities}")
             config.use_custom_entities = args.use_custom_entities
+        else:
+            print("DEBUG: use_custom_entities argument not found")
             
         if hasattr(args, 'destroy_graph'):
             config.destroy_graph = args.destroy_graph
@@ -371,6 +374,14 @@ async def initialize_graphiti():
     global graphiti_client, config
 
     try:
+        # Google Cloud credentials are handled by environment variables
+        # Docker: GOOGLE_APPLICATION_CREDENTIALS=/app/adc.json (set in docker-compose.yml)
+        # Local: GOOGLE_APPLICATION_CREDENTIALS=~/.config/gcloud/application_default_credentials.json (set in shell)
+        if 'GOOGLE_APPLICATION_CREDENTIALS' in os.environ:
+            logger.info(f'Using Google Cloud credentials: {os.environ["GOOGLE_APPLICATION_CREDENTIALS"]}')
+        else:
+            logger.warning('GOOGLE_APPLICATION_CREDENTIALS not set')
+
         if not config.neo4j.uri or not config.neo4j.user or not config.neo4j.password:
             raise ValueError('NEO4J_URI, NEO4J_USER, and NEO4J_PASSWORD must be set')
 
@@ -637,6 +648,274 @@ async def clear_graph() -> SuccessResponse | ErrorResponse:
         error_msg = str(e)
         logger.error(f'Error clearing graph: {error_msg}')
         return {'error': f'Error clearing graph: {error_msg}'}
+
+
+@mcp.tool()
+async def export_memories(
+    group_ids: list[str] | None = None,
+    include_entities: bool = True,
+    include_relationships: bool = True,
+    save_to_file: bool = True
+) -> dict[str, Any] | ErrorResponse:
+    """Export all memories in human-readable JSON format for backup/migration."""
+    global graphiti_client
+
+    if graphiti_client is None:
+        return {'error': 'Graphiti client not initialized'}
+
+    try:
+        import json
+        import os
+        from pathlib import Path
+        
+        assert graphiti_client is not None
+        client = cast(Graphiti, graphiti_client)
+
+        logger.info("Starting memory export...")
+
+        # Determine which group_ids to export
+        effective_group_ids = group_ids if group_ids is not None else []
+        if not effective_group_ids:
+            # Get all group_ids if none specified
+            records, _, _ = await client.driver.execute_query(
+                """
+                MATCH (n) WHERE n.group_id IS NOT NULL
+                RETURN DISTINCT n.group_id AS group_id
+                """,
+                database_="neo4j"
+            )
+            effective_group_ids = [record['group_id'] for record in records]
+
+        export_data = {
+            "export_metadata": {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "format_version": "1.0",
+                "group_ids": effective_group_ids,
+                "total_groups": len(effective_group_ids)
+            },
+            "episodes": [],
+            "entities": [] if include_entities else None,
+            "relationships": [] if include_relationships else None
+        }
+
+        # Export Episodes (the main memories)
+        logger.info("Exporting episodes...")
+        group_filter = "WHERE e.group_id IN $group_ids" if effective_group_ids else ""
+        
+        episode_query = f"""
+            MATCH (e:Episodic)
+            {group_filter}
+            RETURN e.uuid AS uuid, e.name AS name, e.content AS content,
+                   e.source AS source, e.source_description AS source_description,
+                   e.group_id AS group_id, e.created_at AS created_at,
+                   e.valid_at AS valid_at, e.entity_edges AS entity_edges
+            ORDER BY e.created_at ASC
+        """
+        
+        episode_records, _, _ = await client.driver.execute_query(
+            episode_query,
+            group_ids=effective_group_ids,
+            database_="neo4j"
+        )
+
+        for record in episode_records:
+            episode_data = {
+                "uuid": record['uuid'],
+                "name": record['name'],
+                "content": record['content'],
+                "source": record['source'],
+                "source_description": record['source_description'],
+                "group_id": record['group_id'],
+                "created_at": record['created_at'].isoformat() if record['created_at'] else None,
+                "valid_at": record['valid_at'].isoformat() if record['valid_at'] else None,
+                "entity_edges": record.get('entity_edges', [])
+            }
+            export_data["episodes"].append(episode_data)
+
+        # Export Entities (if requested)
+        if include_entities:
+            logger.info("Exporting entities...")
+            entity_filter = "WHERE n.group_id IN $group_ids" if effective_group_ids else ""
+            
+            entity_query = f"""
+                MATCH (n:Entity)
+                {entity_filter}
+                RETURN n.uuid AS uuid, n.name AS name, n.summary AS summary,
+                       n.group_id AS group_id, n.created_at AS created_at,
+                       labels(n) AS labels, properties(n) AS properties
+                ORDER BY n.created_at ASC
+            """
+            
+            entity_records, _, _ = await client.driver.execute_query(
+                entity_query,
+                group_ids=effective_group_ids,
+                database_="neo4j"
+            )
+
+            for record in entity_records:
+                # Filter out embedding and system properties
+                clean_properties = {
+                    k: v for k, v in record['properties'].items() 
+                    if not k.endswith('_embedding') and k not in ['uuid', 'name', 'summary', 'group_id', 'created_at']
+                }
+                
+                entity_data = {
+                    "uuid": record['uuid'],
+                    "name": record['name'],
+                    "summary": record['summary'],
+                    "group_id": record['group_id'],
+                    "created_at": record['created_at'].isoformat() if record['created_at'] else None,
+                    "labels": [label for label in record['labels'] if label != 'Entity'],
+                    "attributes": clean_properties
+                }
+                export_data["entities"].append(entity_data)
+
+        # Export Relationships (if requested)
+        if include_relationships:
+            logger.info("Exporting relationships...")
+            relationship_filter = "WHERE r.group_id IN $group_ids" if effective_group_ids else ""
+            
+            relationship_query = f"""
+                MATCH (source:Entity)-[r:RELATES_TO]->(target:Entity)
+                {relationship_filter}
+                RETURN r.uuid AS uuid, r.name AS name, r.fact AS fact,
+                       r.group_id AS group_id, r.created_at AS created_at,
+                       r.episodes AS episodes, r.expired_at AS expired_at,
+                       r.valid_at AS valid_at, r.invalid_at AS invalid_at,
+                       source.uuid AS source_uuid, source.name AS source_name,
+                       target.uuid AS target_uuid, target.name AS target_name,
+                       properties(r) AS properties
+                ORDER BY r.created_at ASC
+            """
+            
+            relationship_records, _, _ = await client.driver.execute_query(
+                relationship_query,
+                group_ids=effective_group_ids,
+                database_="neo4j"
+            )
+
+            for record in relationship_records:
+                # Filter out embedding properties
+                clean_properties = {
+                    k: v for k, v in record['properties'].items() 
+                    if not k.endswith('_embedding') and k not in [
+                        'uuid', 'name', 'fact', 'group_id', 'created_at', 
+                        'episodes', 'expired_at', 'valid_at', 'invalid_at'
+                    ]
+                }
+                
+                relationship_data = {
+                    "uuid": record['uuid'],
+                    "name": record['name'],
+                    "fact": record['fact'],
+                    "group_id": record['group_id'],
+                    "created_at": record['created_at'].isoformat() if record['created_at'] else None,
+                    "expired_at": record['expired_at'].isoformat() if record['expired_at'] else None,
+                    "valid_at": record['valid_at'].isoformat() if record['valid_at'] else None,
+                    "invalid_at": record['invalid_at'].isoformat() if record['invalid_at'] else None,
+                    "episodes": record.get('episodes', []),
+                    "source": {
+                        "uuid": record['source_uuid'],
+                        "name": record['source_name']
+                    },
+                    "target": {
+                        "uuid": record['target_uuid'],
+                        "name": record['target_name']
+                    },
+                    "attributes": clean_properties
+                }
+                export_data["relationships"].append(relationship_data)
+
+        # Add summary statistics
+        export_data["export_metadata"]["statistics"] = {
+            "total_episodes": len(export_data["episodes"]),
+            "total_entities": len(export_data["entities"]) if include_entities else 0,
+            "total_relationships": len(export_data["relationships"]) if include_relationships else 0
+        }
+
+        # Save to file if requested
+        if save_to_file:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"graphiti_export_{timestamp}.json"
+            
+            with open(filename, 'w', encoding='utf-8') as f:
+                json.dump(export_data, f, indent=2, ensure_ascii=False)
+            
+            export_data["export_metadata"]["saved_to_file"] = filename
+            logger.info(f"Export saved to file: {filename}")
+
+        logger.info(f"Export completed: {export_data['export_metadata']['statistics']}")
+        
+        return export_data
+
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f'Error during memory export: {error_msg}')
+        return {'error': f'Error during memory export: {error_msg}'}
+
+
+@mcp.tool()
+async def import_episodes_from_export(
+    export_data: dict[str, Any],
+    target_group_id: str | None = None,
+    skip_existing: bool = True
+) -> SuccessResponse | ErrorResponse:
+    """Import episodes from exported data back into the system."""
+    global graphiti_client
+
+    if graphiti_client is None:
+        return {'error': 'Graphiti client not initialized'}
+
+    try:
+        if 'episodes' not in export_data:
+            return {'error': 'No episodes found in export data'}
+
+        episodes = export_data['episodes']
+        imported_count = 0
+        skipped_count = 0
+        
+        for episode in episodes:
+            try:
+                # Use target_group_id if provided, otherwise use original
+                group_id = target_group_id if target_group_id else episode.get('group_id')
+                
+                # Check if episode already exists (if skip_existing is True)
+                if skip_existing:
+                    existing_check, _, _ = await graphiti_client.driver.execute_query(
+                        "MATCH (e:Episodic {uuid: $uuid}) RETURN COUNT(e) AS count",
+                        uuid=episode['uuid'],
+                        database_="neo4j"
+                    )
+                    if existing_check[0]['count'] > 0:
+                        skipped_count += 1
+                        continue
+
+                # Import via add_memory
+                result = await add_memory(
+                    name=episode['name'],
+                    episode_body=episode['content'],
+                    group_id=group_id,
+                    source=episode.get('source', 'text'),
+                    source_description=episode.get('source_description', ''),
+                    uuid=episode['uuid']
+                )
+                
+                if 'error' not in result:
+                    imported_count += 1
+                else:
+                    logger.warning(f"Failed to import episode {episode['uuid']}: {result['error']}")
+                    
+            except Exception as e:
+                logger.error(f"Error importing episode {episode.get('uuid', 'unknown')}: {str(e)}")
+
+        return {
+            'message': f'Import completed: {imported_count} episodes imported, {skipped_count} skipped'
+        }
+
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f'Error during import: {error_msg}')
+        return {'error': f'Error during import: {error_msg}'}
 
 
 async def initialize_server() -> MCPConfig:

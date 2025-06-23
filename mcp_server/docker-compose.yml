@@ -37,13 +37,15 @@ services:
       - NEO4J_PASSWORD=demodemo
       - OLLAMA_BASE_URL=http://host.docker.internal:11434/v1
       - PATH=/root/.local/bin:${PATH}
+      - GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT:-your-project-id}
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/adc.json
     volumes:
       # Mount the ADC file from your local machine to the container.
       # The path to your local ADC file might vary.
       - ~/.config/gcloud/application_default_credentials.json:/app/adc.json:ro
     ports:
       - "8667:8000" # Expose the MCP server via HTTP for SSE transport
-    command: ["uv", "run", "graphiti_mcp_server_gemini_ollama.py", "--transport", "sse", "--host", "0.0.0.0"]
+    command: ["uv", "run", "graphiti_mcp_server_gemini_ollama.py", "--transport", "sse", "--host", "0.0.0.0", "--use-custom-entities"]
 
 volumes:
   neo4j_data:

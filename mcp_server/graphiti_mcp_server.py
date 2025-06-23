@@ -45,8 +45,8 @@ load_dotenv()
 
 
 # Default models - Using Gemini and Ollama
-DEFAULT_LLM_MODEL = 'gemini-2.5-flash'
-SMALL_LLM_MODEL = 'gemini-2.5-flash'
+DEFAULT_LLM_MODEL = 'gemini-2.5-flash-lite-preview-06-17'
+SMALL_LLM_MODEL = 'gemini-2.5-flash-lite-preview-06-17'
 DEFAULT_EMBEDDER_MODEL = 'nomic-embed-text'
 
 
