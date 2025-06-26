@@ -8,10 +8,11 @@ import argparse
 import asyncio
 import logging
 import os
-import sys
-from collections.abc import Callable
 from datetime import datetime, timezone
-from typing import Any, TypedDict, cast
+import sys
+from typing import Any, cast
+
+from typing_extensions import TypedDict
 
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
@@ -21,7 +22,7 @@ from graphiti_core import Graphiti
 from graphiti_core.edges import EntityEdge
 from graphiti_core.embedder.openai import OpenAIEmbedderConfig
 from graphiti_core.llm_client.config import LLMConfig
-from graphiti_core.nodes import EpisodeType, EpisodicNode
+from graphiti_core.nodes import EpisodeType
 from graphiti_core.search.search_config_recipes import (
     NODE_HYBRID_SEARCH_NODE_DISTANCE,
     NODE_HYBRID_SEARCH_RRF,
@@ -93,7 +94,7 @@ def ensure_no_embeddings(data: dict[str, Any]) -> dict[str, Any]:
         data: Dictionary that might contain embedding data
         
     Returns:
-        Dictionary with all embedding fields removed
+        Dictionary with all embedding fields removed recursively
     """
     # List of all known embedding fields that should never be exposed
     embedding_fields = [
@@ -103,7 +104,7 @@ def ensure_no_embeddings(data: dict[str, Any]) -> dict[str, Any]:
         'embedding',           # Generic embedding field
     ]
     
-    # Remove any embedding fields that might be present
+    # Remove any embedding fields that might be present at top level
     for field in embedding_fields:
         data.pop(field, None)
     
@@ -111,6 +112,20 @@ def ensure_no_embeddings(data: dict[str, Any]) -> dict[str, Any]:
     keys_to_remove = [key for key in data.keys() if key.endswith('_embedding')]
     for key in keys_to_remove:
         data.pop(key, None)
+    
+    # Recursively clean nested dictionaries
+    for key, value in data.items():
+        if isinstance(value, dict):
+            data[key] = ensure_no_embeddings(value)
+        elif isinstance(value, list):
+            # Clean any dictionaries in lists
+            cleaned_list = []
+            for item in value:
+                if isinstance(item, dict):
+                    cleaned_list.append(ensure_no_embeddings(item))
+                else:
+                    cleaned_list.append(item)
+            data[key] = cleaned_list
     
     return data
 
@@ -429,6 +444,7 @@ def format_fact_result(edge: EntityEdge) -> dict[str, Any]:
     )
     
     # Additional safety: use utility function to ensure no embeddings leak through
+    # This is especially important for the 'attributes' field which can contain fact_embedding
     result = ensure_no_embeddings(result)
     
     return result
