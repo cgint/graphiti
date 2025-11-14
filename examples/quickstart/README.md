@@ -17,7 +17,9 @@ This example demonstrates the basic functionality of Graphiti, including:
   - Neo4j Desktop installed and running  
   - A local DBMS created and started in Neo4j Desktop  
 - **For FalkorDB**:
-  - FalkorDB server running (see [FalkorDB documentation](https://falkordb.com/docs/) for setup)
+  - FalkorDB server running (see [FalkorDB documentation](https://docs.falkordb.com) for setup)
+- **For Amazon Neptune**:
+  - Amazon server running (see [Amazon Neptune documentation](https://aws.amazon.com/neptune/developer-resources/) for setup)
 
 
 ## Setup Instructions
@@ -41,7 +43,19 @@ export NEO4J_PASSWORD=password
 
 # Optional FalkorDB connection parameters (defaults shown)
 export FALKORDB_URI=falkor://localhost:6379
+
+# Optional Amazon Neptune connection parameters
+NEPTUNE_HOST=your_neptune_host
+NEPTUNE_PORT=your_port_or_8182
+AOSS_HOST=your_aoss_host
+AOSS_PORT=your_port_or_443
+
+# To use a different database, modify the driver constructor in the script
 ```
+
+TIP: For Amazon Neptune host string please use the following formats
+* For Neptune Database: `neptune-db://<cluster endpoint>`
+* For Neptune Analytics: `neptune-graph://<graph identifier>`
 
 3. Run the example:
 
@@ -50,11 +64,14 @@ python quickstart_neo4j.py
 
 # For FalkorDB
 python quickstart_falkordb.py
+
+# For Amazon Neptune
+python quickstart_neptune.py
 ```
 
 ## What This Example Demonstrates
 
-- **Graph Initialization**: Setting up the Graphiti indices and constraints in Neo4j or FalkorDB
+- **Graph Initialization**: Setting up the Graphiti indices and constraints in Neo4j, Amazon Neptune, or FalkorDB
 - **Adding Episodes**: Adding text content that will be analyzed and converted into knowledge graph nodes and edges
 - **Edge Search Functionality**: Performing hybrid searches that combine semantic similarity and BM25 retrieval to find relationships (edges)
 - **Graph-Aware Search**: Using the source node UUID from the top search result to rerank additional search results based on graph distance
@@ -70,6 +87,23 @@ After running this example, you can:
 3. Experiment with different center nodes for graph-distance-based reranking
 4. Try other predefined search recipes from `graphiti_core.search.search_config_recipes`
 5. Explore the more advanced examples in the other directories
+
+## Troubleshooting
+
+### "Graph not found: default_db" Error
+
+If you encounter the error `Neo.ClientError.Database.DatabaseNotFound: Graph not found: default_db`, this occurs when the driver is trying to connect to a database that doesn't exist.
+
+**Solution:**
+The Neo4j driver defaults to using `neo4j` as the database name. If you need to use a different database, modify the driver constructor in the script:
+
+```python
+# In quickstart_neo4j.py, change:
+driver = Neo4jDriver(uri=neo4j_uri, user=neo4j_user, password=neo4j_password)
+
+# To specify a different database:
+driver = Neo4jDriver(uri=neo4j_uri, user=neo4j_user, password=neo4j_password, database="your_db_name")
+```
 
 ## Understanding the Output
 

@@ -14,4 +14,6 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
-__all__ = ['GraphDriver', 'Neo4jDriver', 'FalkorDriver']
+from neo4j import Neo4jDriver
+
+__all__ = ['Neo4jDriver']

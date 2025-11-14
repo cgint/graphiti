@@ -14,60 +14,102 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
-import json
 import logging
-from typing import Any
+from typing import ClassVar
 
-from openai import AsyncAzureOpenAI
+from openai import AsyncAzureOpenAI, AsyncOpenAI
 from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel
 
-from ..prompts.models import Message
-from .client import LLMClient
-from .config import LLMConfig, ModelSize
+from .config import DEFAULT_MAX_TOKENS, LLMConfig
+from .openai_base_client import BaseOpenAIClient
 
 logger = logging.getLogger(__name__)
 
 
-class AzureOpenAILLMClient(LLMClient):
-    """Wrapper class for AsyncAzureOpenAI that implements the LLMClient interface."""
+class AzureOpenAILLMClient(BaseOpenAIClient):
+    """Wrapper class for Azure OpenAI that implements the LLMClient interface.
 
-    def __init__(self, azure_client: AsyncAzureOpenAI, config: LLMConfig | None = None):
-        super().__init__(config, cache=False)
-        self.azure_client = azure_client
+    Supports both AsyncAzureOpenAI and AsyncOpenAI (with Azure v1 API endpoint).
+    """
 
-    async def _generate_response(
+    # Class-level constants
+    MAX_RETRIES: ClassVar[int] = 2
+
+    def __init__(
         self,
-        messages: list[Message],
+        azure_client: AsyncAzureOpenAI | AsyncOpenAI,
+        config: LLMConfig | None = None,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+        reasoning: str | None = None,
+        verbosity: str | None = None,
+    ):
+        super().__init__(
+            config,
+            cache=False,
+            max_tokens=max_tokens,
+            reasoning=reasoning,
+            verbosity=verbosity,
+        )
+        self.client = azure_client
+
+    async def _create_structured_completion(
+        self,
+        model: str,
+        messages: list[ChatCompletionMessageParam],
+        temperature: float | None,
+        max_tokens: int,
+        response_model: type[BaseModel],
+        reasoning: str | None,
+        verbosity: str | None,
+    ):
+        """Create a structured completion using Azure OpenAI's responses.parse API."""
+        supports_reasoning = self._supports_reasoning_features(model)
+        request_kwargs = {
+            "model": model,
+            "input": messages,
+            "max_output_tokens": max_tokens,
+            "text_format": response_model,  # type: ignore
+        }
+
+        temperature_value = temperature if not supports_reasoning else None
+        if temperature_value is not None:
+            request_kwargs["temperature"] = temperature_value
+
+        if supports_reasoning and reasoning:
+            request_kwargs["reasoning"] = {"effort": reasoning}  # type: ignore
+
+        if supports_reasoning and verbosity:
+            request_kwargs["text"] = {"verbosity": verbosity}  # type: ignore
+
+        return await self.client.responses.parse(**request_kwargs)
+
+    async def _create_completion(
+        self,
+        model: str,
+        messages: list[ChatCompletionMessageParam],
+        temperature: float | None,
+        max_tokens: int,
         response_model: type[BaseModel] | None = None,
-        max_tokens: int = 1024,
-        model_size: ModelSize = ModelSize.medium,
-    ) -> dict[str, Any]:
-        """Generate response using Azure OpenAI client."""
-        # Convert messages to OpenAI format
-        openai_messages: list[ChatCompletionMessageParam] = []
-        for message in messages:
-            message.content = self._clean_input(message.content)
-            if message.role == 'user':
-                openai_messages.append({'role': 'user', 'content': message.content})
-            elif message.role == 'system':
-                openai_messages.append({'role': 'system', 'content': message.content})
+    ):
+        """Create a regular completion with JSON format using Azure OpenAI."""
+        supports_reasoning = self._supports_reasoning_features(model)
 
-        # Ensure model is a string
-        model_name = self.model if self.model else 'gpt-4o-mini'
+        request_kwargs = {
+            "model": model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "response_format": {"type": "json_object"},
+        }
 
-        try:
-            response = await self.azure_client.chat.completions.create(
-                model=model_name,
-                messages=openai_messages,
-                temperature=float(self.temperature) if self.temperature is not None else 0.7,
-                max_tokens=max_tokens,
-                response_format={'type': 'json_object'},
-            )
-            result = response.choices[0].message.content or '{}'
+        temperature_value = temperature if not supports_reasoning else None
+        if temperature_value is not None:
+            request_kwargs["temperature"] = temperature_value
 
-            # Parse JSON response
-            return json.loads(result)
-        except Exception as e:
-            logger.error(f'Error in Azure OpenAI LLM response: {e}')
-            raise
+        return await self.client.chat.completions.create(**request_kwargs)
+
+    @staticmethod
+    def _supports_reasoning_features(model: str) -> bool:
+        """Return True when the Azure model supports reasoning/verbosity options."""
+        reasoning_prefixes = ("o1", "o3", "gpt-5")
+        return model.startswith(reasoning_prefixes)
