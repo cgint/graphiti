@@ -14,6 +14,36 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
+#################################################
+# EPISODE NAMING BEST PRACTICES
+#################################################
+# The 'name' parameter in add_episode() is a human-readable identifier
+# for provenance tracking and debugging. It should answer:
+# "Where did this fact come from?"
+#
+# General Principles:
+#   - Unique & Identifiable: Distinguish between episodes in the same batch
+#   - Concise but Descriptive: Readable in logs (aim for <60 chars)
+#   - Tied to Source: Makes provenance tracking meaningful
+#
+# Recommendations by Use Case:
+#   - Documents (PDF, articles): Use document title
+#       e.g., 'California AG Report 2011'
+#   - Documents with sections: Title + section/page
+#       e.g., 'Budget Report - Chapter 3'
+#   - Chat messages: Actor + timestamp or context
+#       e.g., 'User message - 2024-01-15 14:30'
+#   - JSON/structured data: Key identifying field(s)
+#       e.g., 'Gavin Newsom - Governor Profile'
+#   - Meeting transcripts: Meeting name + date
+#       e.g., 'Q4 Planning - 2024-12-01'
+#   - Podcast/video: Episode title + segment
+#       e.g., 'Freakonomics Ep.123 - Harris Interview'
+#
+# For chunked documents, use: 'Document Title - Chunk N' or
+# 'Document Title - Page X-Y'
+#################################################
+
 import argparse
 import asyncio
 import json
@@ -26,8 +56,7 @@ from dotenv import load_dotenv
 
 from graphiti_core import Graphiti
 from graphiti_core.driver.falkordb_driver import FalkorDriver
-from graphiti_core.nodes import EpisodeType, EpisodicNode, EntityNode
-from graphiti_core.edges import EntityEdge
+from graphiti_core.nodes import EpisodeType, EpisodicNode
 from graphiti_core.search.search_config_recipes import NODE_HYBRID_SEARCH_RRF
 from graphiti_core.llm_client.gemini_client import GeminiClient, LLMConfig
 from graphiti_core.embedder.gemini import GeminiEmbedder, GeminiEmbedderConfig
@@ -75,22 +104,167 @@ async def export_graph_data(graphiti: Graphiti):
     """Exports all nodes and relationships to JSONL files."""
     print("\nStarting graph data export to JSONL files...")
 
-    # Export Nodes
-    all_nodes = await EntityNode.get_all(graphiti.driver)
+    # Collect all nodes
+    all_nodes = []
+
+    # Export Entity Nodes using raw query
+    entity_records, _, _ = await graphiti.driver.execute_query(
+        """
+        MATCH (n:Entity)
+        RETURN n.uuid AS uuid, n.name AS name, n.group_id AS group_id, 
+               n.summary AS summary, n.created_at AS created_at, labels(n) AS labels
+        """,
+        routing_='r',
+    )
+    
+    for record in entity_records:
+        all_nodes.append({
+            'type': 'Entity',
+            'uuid': record['uuid'],
+            'name': record['name'],
+            'group_id': record['group_id'],
+            'summary': record['summary'],
+            'created_at': str(record['created_at']) if record['created_at'] else None,
+            'labels': record['labels'],
+        })
+    print(f"Found {len(entity_records)} entity nodes")
+
+    # Export Episodic Nodes (source episodes) using raw query
+    episodic_records, _, _ = await graphiti.driver.execute_query(
+        """
+        MATCH (e:Episodic)
+        RETURN e.uuid AS uuid, e.name AS name, e.group_id AS group_id,
+               e.content AS content, e.source AS source, 
+               e.source_description AS source_description,
+               e.created_at AS created_at, e.valid_at AS valid_at,
+               e.entity_edges AS entity_edges
+        """,
+        routing_='r',
+    )
+    
+    for record in episodic_records:
+        all_nodes.append({
+            'type': 'Episodic',
+            'uuid': record['uuid'],
+            'name': record['name'],
+            'group_id': record['group_id'],
+            'content': record['content'],
+            'source': record['source'],
+            'source_description': record['source_description'],
+            'created_at': str(record['created_at']) if record['created_at'] else None,
+            'valid_at': str(record['valid_at']) if record['valid_at'] else None,
+            'entity_edges': record['entity_edges'],
+        })
+    print(f"Found {len(episodic_records)} episodic nodes")
+
+    # Export Community Nodes (if any exist)
+    community_records, _, _ = await graphiti.driver.execute_query(
+        """
+        MATCH (c:Community)
+        RETURN c.uuid AS uuid, c.name AS name, c.group_id AS group_id,
+               c.summary AS summary, c.created_at AS created_at
+        """,
+        routing_='r',
+    )
+    
+    for record in community_records:
+        all_nodes.append({
+            'type': 'Community',
+            'uuid': record['uuid'],
+            'name': record['name'],
+            'group_id': record['group_id'],
+            'summary': record['summary'],
+            'created_at': str(record['created_at']) if record['created_at'] else None,
+        })
+    print(f"Found {len(community_records)} community nodes")
+
+    # Write all nodes to single file
     with open("exported_nodes.jsonl", "w", encoding="utf-8") as f:
         for node in all_nodes:
-            # Use model_dump to convert Pydantic model to dict, then dump to JSON
-            f.write(json.dumps(node.model_dump(mode='json'), ensure_ascii=False) + "\n")
-    print(f"Exported {len(all_nodes)} nodes to exported_nodes.jsonl")
+            f.write(json.dumps(node, ensure_ascii=False) + "\n")
+    print(f"Exported {len(all_nodes)} total nodes to exported_nodes.jsonl")
 
-    # Export Relationships
-    all_relationships = await EntityEdge.get_all(graphiti.driver)
-    with open("exported_relationships.jsonl", "w", encoding="utf-8") as f:
-        for rel in all_relationships:
-            f.write(json.dumps(rel.model_dump(mode='json'), ensure_ascii=False) + "\n")
-    print(f"Exported {len(all_relationships)} relationships to exported_relationships.jsonl")
+    # Collect all edges
+    all_edges = []
 
-    print("Graph data export completed.")
+    # Export Entity Edges (RELATES_TO relationships) using raw query
+    relates_to_records, _, _ = await graphiti.driver.execute_query(
+        """
+        MATCH (n:Entity)-[e:RELATES_TO]->(m:Entity)
+        RETURN e.uuid AS uuid, e.name AS name, e.fact AS fact, e.group_id AS group_id,
+               e.episodes AS episodes, e.created_at AS created_at, 
+               e.valid_at AS valid_at, e.invalid_at AS invalid_at,
+               n.uuid AS source_node_uuid, m.uuid AS target_node_uuid
+        """,
+        routing_='r',
+    )
+    
+    for record in relates_to_records:
+        all_edges.append({
+            'type': 'RELATES_TO',
+            'uuid': record['uuid'],
+            'name': record['name'],
+            'fact': record['fact'],
+            'group_id': record['group_id'],
+            'episodes': record['episodes'],
+            'created_at': str(record['created_at']) if record['created_at'] else None,
+            'valid_at': str(record['valid_at']) if record['valid_at'] else None,
+            'invalid_at': str(record['invalid_at']) if record['invalid_at'] else None,
+            'source_node_uuid': record['source_node_uuid'],
+            'target_node_uuid': record['target_node_uuid'],
+        })
+    print(f"Found {len(relates_to_records)} RELATES_TO edges")
+
+    # Export MENTIONS edges (Episodic -> Entity) using raw query
+    mentions_records, _, _ = await graphiti.driver.execute_query(
+        """
+        MATCH (ep:Episodic)-[m:MENTIONS]->(en:Entity)
+        RETURN m.uuid AS uuid, m.group_id AS group_id, m.created_at AS created_at,
+               ep.uuid AS source_node_uuid, en.uuid AS target_node_uuid
+        """,
+        routing_='r',
+    )
+    
+    for record in mentions_records:
+        all_edges.append({
+            'type': 'MENTIONS',
+            'uuid': record['uuid'],
+            'group_id': record['group_id'],
+            'created_at': str(record['created_at']) if record['created_at'] else None,
+            'source_node_uuid': record['source_node_uuid'],
+            'target_node_uuid': record['target_node_uuid'],
+        })
+    print(f"Found {len(mentions_records)} MENTIONS edges")
+
+    # Export HAS_MEMBER edges (Community -> Entity) if any exist
+    has_member_records, _, _ = await graphiti.driver.execute_query(
+        """
+        MATCH (c:Community)-[h:HAS_MEMBER]->(e:Entity)
+        RETURN h.uuid AS uuid, h.group_id AS group_id, h.created_at AS created_at,
+               c.uuid AS source_node_uuid, e.uuid AS target_node_uuid
+        """,
+        routing_='r',
+    )
+    
+    for record in has_member_records:
+        all_edges.append({
+            'type': 'HAS_MEMBER',
+            'uuid': record['uuid'],
+            'group_id': record['group_id'],
+            'created_at': str(record['created_at']) if record['created_at'] else None,
+            'source_node_uuid': record['source_node_uuid'],
+            'target_node_uuid': record['target_node_uuid'],
+        })
+    print(f"Found {len(has_member_records)} HAS_MEMBER edges")
+
+    # Write all edges to single file
+    with open("exported_edges.jsonl", "w", encoding="utf-8") as f:
+        for edge in all_edges:
+            f.write(json.dumps(edge, ensure_ascii=False) + "\n")
+    print(f"Exported {len(all_edges)} total edges to exported_edges.jsonl")
+
+    print("\nGraph data export completed.")
+    print(f"Summary: {len(all_nodes)} nodes, {len(all_edges)} edges")
 
 async def main(query_only: bool = False, clear: bool = False, export: bool = False):
     #################################################
