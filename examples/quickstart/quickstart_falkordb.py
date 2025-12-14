@@ -100,6 +100,207 @@ falkor_port = os.environ.get('FALKORDB_PORT', '6379') or '6379'
 gemini_api_key = os.environ.get('GEMINI_API_KEY') or os.environ.get('GOOGLE_API_KEY')
 
 
+#################################################
+# SCENARIO DEFINITIONS
+#################################################
+# Three example scenarios demonstrating temporal
+# knowledge graph capabilities with different
+# use cases and natural time-based evolution.
+#################################################
+
+SCENARIOS = {
+    'politics': {
+        'name': 'California Politics',
+        'description': 'Political careers and government positions in California',
+        'search_query': 'Who was the California Attorney General?',
+        'episodes': [
+            {
+                'name': 'Harris - CA Attorney General Background',
+                'content': 'Kamala Harris is the Attorney General of California. She was previously '
+                           'the district attorney for San Francisco.',
+                'type': EpisodeType.text,
+                'description': 'podcast transcript',
+                'reference_time': datetime(2011, 1, 3, tzinfo=timezone.utc),
+            },
+            {
+                'name': 'Harris - AG Term Dates',
+                'content': 'As AG, Harris was in office from January 3, 2011 – January 3, 2017',
+                'type': EpisodeType.text,
+                'description': 'podcast transcript',
+                'reference_time': datetime(2019, 2, 5, tzinfo=timezone.utc),
+            },
+            {
+                'name': 'Newsom - Governor Profile',
+                'content': {
+                    'name': 'Gavin Newsom',
+                    'position': 'Governor',
+                    'state': 'California',
+                    'previous_role': 'Lieutenant Governor',
+                    'previous_location': 'San Francisco',
+                },
+                'type': EpisodeType.json,
+                'description': 'podcast metadata',
+                'reference_time': datetime(2019, 1, 7, tzinfo=timezone.utc),
+            },
+            {
+                'name': 'Newsom - Governor Term Info',
+                'content': {
+                    'name': 'Gavin Newsom',
+                    'position': 'Governor',
+                    'term_start': 'January 7, 2019',
+                    'term_end': 'Present',
+                },
+                'type': EpisodeType.json,
+                'description': 'podcast metadata',
+                'reference_time': datetime(2022, 3, 30, tzinfo=timezone.utc),
+            },
+        ],
+    },
+    'employee': {
+        'name': 'Employee Career Journey',
+        'description': 'Career progression of Sarah Chen at TechCorp - promotions, team changes, projects',
+        'search_query': 'What is Sarah Chen\'s current role?',
+        'episodes': [
+            {
+                'name': 'Sarah Chen - Hiring',
+                'content': 'Sarah Chen joined TechCorp as a Software Engineer on the Platform team. '
+                           'Her manager is Michael Torres. She has a background in distributed systems.',
+                'type': EpisodeType.text,
+                'description': 'HR onboarding record',
+                'reference_time': datetime(2020, 3, 15, tzinfo=timezone.utc),
+            },
+            {
+                'name': 'Sarah Chen - Project Success',
+                'content': 'Sarah Chen led the migration of the payment system to microservices. '
+                           'The project reduced latency by 40% and was completed ahead of schedule. '
+                           'Team members included Jake Miller and Priya Sharma.',
+                'type': EpisodeType.text,
+                'description': 'project review',
+                'reference_time': datetime(2021, 6, 1, tzinfo=timezone.utc),
+            },
+            {
+                'name': 'Sarah Chen - Promotion to Senior',
+                'content': {
+                    'employee': 'Sarah Chen',
+                    'previous_title': 'Software Engineer',
+                    'new_title': 'Senior Software Engineer',
+                    'effective_date': 'July 1, 2021',
+                    'manager': 'Michael Torres',
+                    'team': 'Platform',
+                },
+                'type': EpisodeType.json,
+                'description': 'HR promotion record',
+                'reference_time': datetime(2021, 7, 1, tzinfo=timezone.utc),
+            },
+            {
+                'name': 'Sarah Chen - Team Transfer',
+                'content': 'Sarah Chen is transferring from Platform team to the AI/ML team. '
+                           'Her new manager is Lisa Park. The transfer is effective April 1, 2022. '
+                           'She will focus on recommendation systems.',
+                'type': EpisodeType.text,
+                'description': 'internal transfer notice',
+                'reference_time': datetime(2022, 4, 1, tzinfo=timezone.utc),
+            },
+            {
+                'name': 'Sarah Chen - Tech Lead Appointment',
+                'content': {
+                    'employee': 'Sarah Chen',
+                    'previous_title': 'Senior Software Engineer',
+                    'new_title': 'Tech Lead',
+                    'team': 'AI/ML',
+                    'manager': 'Lisa Park',
+                    'direct_reports': ['Alex Kim', 'Jordan Lee', 'Casey Brown'],
+                    'effective_date': 'January 15, 2023',
+                },
+                'type': EpisodeType.json,
+                'description': 'org announcement',
+                'reference_time': datetime(2023, 1, 15, tzinfo=timezone.utc),
+            },
+            {
+                'name': 'AI/ML Team - Product Launch',
+                'content': 'The AI/ML team under Sarah Chen\'s leadership shipped the new '
+                           'recommendation engine to production. The system serves 10M requests/day. '
+                           'Key contributors: Alex Kim, Jordan Lee, and Casey Brown.',
+                'type': EpisodeType.text,
+                'description': 'product launch announcement',
+                'reference_time': datetime(2023, 8, 1, tzinfo=timezone.utc),
+            },
+        ],
+    },
+    'customer': {
+        'name': 'B2B Customer Relationship',
+        'description': 'Acme Corp customer journey - contracts, expansions, contact changes',
+        'search_query': 'Who is the primary contact at Acme Corp?',
+        'episodes': [
+            {
+                'name': 'Acme Corp - Initial Contract',
+                'content': 'Acme Corp signed a 1-year contract for 50 seats of our Enterprise platform. '
+                           'Primary contact is Bob Wilson, IT Director. Deal value: $25,000/year. '
+                           'Acme Corp is a manufacturing company based in Chicago.',
+                'type': EpisodeType.text,
+                'description': 'sales CRM note',
+                'reference_time': datetime(2021, 2, 1, tzinfo=timezone.utc),
+            },
+            {
+                'name': 'Acme Corp - Pilot Success',
+                'content': {
+                    'customer': 'Acme Corp',
+                    'pilot_department': 'Engineering',
+                    'pilot_users': 50,
+                    'satisfaction_score': 4.5,
+                    'key_feedback': 'Integration with existing tools was seamless',
+                    'contact': 'Bob Wilson',
+                },
+                'type': EpisodeType.json,
+                'description': 'pilot review',
+                'reference_time': datetime(2021, 5, 15, tzinfo=timezone.utc),
+            },
+            {
+                'name': 'Acme Corp - Expansion',
+                'content': 'Acme Corp expanded their contract from 50 to 150 seats '
+                           'after successful pilot in engineering department. New departments: '
+                           'Operations and Finance. Deal value increased to $75,000/year.',
+                'type': EpisodeType.text,
+                'description': 'account update',
+                'reference_time': datetime(2021, 8, 15, tzinfo=timezone.utc),
+            },
+            {
+                'name': 'Acme Corp - Contact Change',
+                'content': 'Bob Wilson has left Acme Corp to join another company. '
+                           'New primary contact is Maria Garcia, VP of Engineering. '
+                           'Maria is enthusiastic about expanding usage to more teams.',
+                'type': EpisodeType.text,
+                'description': 'CRM update',
+                'reference_time': datetime(2022, 3, 1, tzinfo=timezone.utc),
+            },
+            {
+                'name': 'Acme Corp - Support Escalation',
+                'content': {
+                    'customer': 'Acme Corp',
+                    'issue': 'Performance degradation during peak hours',
+                    'severity': 'High',
+                    'contact': 'Maria Garcia',
+                    'resolution': 'Upgraded to dedicated infrastructure',
+                    'resolution_time': '24 hours',
+                },
+                'type': EpisodeType.json,
+                'description': 'support ticket',
+                'reference_time': datetime(2022, 7, 10, tzinfo=timezone.utc),
+            },
+            {
+                'name': 'Acme Corp - Enterprise Upgrade',
+                'content': 'Acme Corp upgraded to Enterprise tier with SSO, dedicated support, '
+                           'and 99.9% SLA. Contract extended to 3 years. 250 seats total. '
+                           'New deal value: $150,000/year. Signed by Maria Garcia.',
+                'type': EpisodeType.text,
+                'description': 'contract amendment',
+                'reference_time': datetime(2022, 11, 1, tzinfo=timezone.utc),
+            },
+        ],
+    },
+}
+
+
 async def export_graph_data(graphiti: Graphiti):
     """Exports all nodes and relationships to JSONL files."""
     print("\nStarting graph data export to JSONL files...")
@@ -266,7 +467,7 @@ async def export_graph_data(graphiti: Graphiti):
     print("\nGraph data export completed.")
     print(f"Summary: {len(all_nodes)} nodes, {len(all_edges)} edges")
 
-async def main(query_only: bool = False, clear: bool = False, export: bool = False):
+async def main(query_only: bool = False, clear: bool = False, export: bool = False, scenario: str = 'politics'):
     #################################################
     # INITIALIZATION
     #################################################
@@ -337,54 +538,20 @@ async def main(query_only: bool = False, clear: bool = False, export: bool = Fal
         # and relationships.
         #################################################
 
+        # Load the selected scenario
+        selected_scenario = SCENARIOS[scenario]
+        print(f'\n=== Scenario: {selected_scenario["name"]} ===')
+        print(f'Description: {selected_scenario["description"]}\n')
+
         if not query_only:
-            # Example: Add Episodes with Temporal Information
-            # Episodes list containing both text and JSON episodes with meaningful timestamps
-            # The reference_time represents when the information in the episode was valid/occurred
-            episodes = [
-                {
-                    'content': 'Kamala Harris is the Attorney General of California. She was previously '
-                    'the district attorney for San Francisco.',
-                    'type': EpisodeType.text,
-                    'description': 'podcast transcript',
-                    'reference_time': datetime(2011, 1, 3, tzinfo=timezone.utc),
-                },
-                {
-                    'content': 'As AG, Harris was in office from January 3, 2011 – January 3, 2017',
-                    'type': EpisodeType.text,
-                    'description': 'podcast transcript',
-                    'reference_time': datetime(2019, 2, 5, tzinfo=timezone.utc)
-                },
-                {
-                    'content': {
-                        'name': 'Gavin Newsom',
-                        'position': 'Governor',
-                        'state': 'California',
-                        'previous_role': 'Lieutenant Governor',
-                        'previous_location': 'San Francisco',
-                    },
-                    'type': EpisodeType.json,
-                    'description': 'podcast metadata',
-                    'reference_time': datetime(2019, 1, 7, tzinfo=timezone.utc),
-                },
-                {
-                    'content': {
-                        'name': 'Gavin Newsom',
-                        'position': 'Governor',
-                        'term_start': 'January 7, 2019',
-                        'term_end': 'Present',
-                    },
-                    'type': EpisodeType.json,
-                    'description': 'podcast metadata',
-                    'reference_time': datetime(2022, 3, 30, tzinfo=timezone.utc),
-                },
-            ]
+            # Get episodes from the selected scenario
+            episodes = selected_scenario['episodes']
 
             # Add episodes to the graph with temporal information
             episode_uuids = []
-            for i, episode in enumerate(episodes):
+            for episode in episodes:
                 result = await graphiti.add_episode(
-                    name=f'Freakonomics Radio {i}',
+                    name=episode['name'],
                     episode_body=episode['content']
                     if isinstance(episode['content'], str)
                     else json.dumps(episode['content']),
@@ -394,7 +561,7 @@ async def main(query_only: bool = False, clear: bool = False, export: bool = Fal
                 )
                 episode_uuids.append(result.episode.uuid)
                 print(
-                    f'Added episode: Freakonomics Radio {i} ({episode["type"].value}) '
+                    f'Added episode: {episode["name"]} ({episode["type"].value}) '
                     f'at {episode["reference_time"].strftime("%Y-%m-%d")}'
                 )
         else:
@@ -410,8 +577,9 @@ async def main(query_only: bool = False, clear: bool = False, export: bool = Fal
         #################################################
 
         # Perform a hybrid search combining semantic similarity and BM25 retrieval
-        print("\nSearching for: 'Who was the California Attorney General?'")
-        results = await graphiti.search('Who was the California Attorney General?')
+        search_query = selected_scenario['search_query']
+        print(f"\nSearching for: '{search_query}'")
+        results = await graphiti.search(search_query)
 
         # Print search results with traceability and temporal information
         print('\nSearch Results:')
@@ -459,7 +627,7 @@ async def main(query_only: bool = False, clear: bool = False, export: bool = Fal
             print(f'Using center node UUID: {center_node_uuid}')
 
             reranked_results = await graphiti.search(
-                'Who was the California Attorney General?', center_node_uuid=center_node_uuid
+                search_query, center_node_uuid=center_node_uuid
             )
 
             # Print reranked search results with traceability
@@ -543,9 +711,31 @@ async def main(query_only: bool = False, clear: bool = False, export: bool = Fal
 
 
 if __name__ == '__main__':
+    # Build scenario choices description
+    scenario_help = 'Scenario to run:\n'
+    for key, val in SCENARIOS.items():
+        scenario_help += f'  {key}: {val["name"]} - {val["description"]}\n'
+
     parser = argparse.ArgumentParser(
         description='Graphiti FalkorDB Quickstart Example',
         formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=f'''
+Available Scenarios:
+  politics  - California Politics: Political careers and government positions
+  employee  - Employee Career Journey: Career progression at TechCorp
+  customer  - B2B Customer Relationship: Acme Corp customer journey
+
+Examples:
+  python quickstart_falkordb.py --scenario employee --clear
+  python quickstart_falkordb.py --scenario customer --query-only
+  python quickstart_falkordb.py --scenario politics
+''',
+    )
+    parser.add_argument(
+        '--scenario',
+        choices=list(SCENARIOS.keys()),
+        default='politics',
+        help='Scenario to run (default: politics)',
     )
     parser.add_argument(
         '--query-only',
@@ -563,4 +753,9 @@ if __name__ == '__main__':
         help='Export all graph nodes and relationships to JSONL files',
     )
     args = parser.parse_args()
-    asyncio.run(main(query_only=args.query_only, clear=args.clear, export=args.export))
+    asyncio.run(main(
+        query_only=args.query_only,
+        clear=args.clear,
+        export=args.export,
+        scenario=args.scenario,
+    ))
