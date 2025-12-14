@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Graphiti Codebase Documentation</title>
+    <style>
+        body { font-family: sans-serif; line-height: 1.6; margin: 20px; color: #333; }
+        h1, h2, h3 { color: #0056b3; }
+        section { margin-bottom: 40px; padding: 20px; border: 1px solid #eee; border-radius: 8px; background-color: #fff; }
+        nav ul { list-style: none; padding: 0; background: #f4f4f4; border-radius: 5px; overflow: hidden; }
+        nav li a { display: block; padding: 10px 15px; text-decoration: none; color: #0056b3; border-bottom: 1px solid #ddd; }
+        nav li a:hover { background-color: #e2e2e2; }
+        nav li:last-child a { border-bottom: none; }
+        .diagram-container { text-align: center; margin: 20px 0; background-color: #f9f9f9; padding: 15px; border-radius: 5px; }
+        .diagram-container img { max-width: 100%; height: auto; border: 1px solid #ccc; }
+        code { background-color: #f0f0f0; padding: 2px 4px; border-radius: 3px; }
+        pre { background-color: #f0f0f0; padding: 10px; border-radius: 5px; overflow-x: auto; }
+    </style>
+</head>
+<body>
+    <nav>
+        <ul>
+            <li><a href="#introduction">Introduction</a></li>
+            <li><a href="#at-a-glance">At a Glance</a></li>
+            <li><a href="#functional-features">Functional Features</a></li>
+            <li><a href="#technical-architecture">Technical Architecture</a></li>
+        </ul>
+    </nav>
+
+    <h1 id="introduction">Graphiti Codebase Documentation</h1>
+
+    <section>
+        <h2>Introduction</h2>
+        <p>
+            Graphiti is a Python framework designed for building and querying dynamic, temporally-aware knowledge graphs. It allows AI agents to continuously integrate new information, reason about changing facts, and maintain historical context, going beyond the capabilities of static Retrieval-Augmented Generation (RAG) tools.
+            This documentation provides a comprehensive overview of both its functional features and technical architecture.
+        </p>
+    </section>
+
+    <section>
+        <h2 id="at-a-glance">At a Glance</h2>
+        <p>Graphiti provides the following core capabilities and features:</p>
+        <ul>
+            <li><b>Dynamic Knowledge Graphs:</b> Converts unstructured text and structured JSON into a network of interconnected entities and relationships.</li>
+            <li><b>Temporal Awareness:</b> Tracks the validity of facts over time, enabling precise historical queries.</li>
+            <li><b>Hybrid Search:</b> Combines semantic (vector), keyword, and graph-based search, with advanced re-ranking based on graph proximity.</li>
+            <li><b>Configurable Backends:</b> Supports multiple graph databases (Neo4j, FalkorDB, Kuzu, Neptune) and integrates with various LLM (OpenAI, Gemini, Anthropic, Ollama) and embedding providers.</li>
+            <li><b>Microservice Ready:</b> Can be deployed via the MCP (Multi-Client Provider) server for API-driven interactions.</li>
+        </ul>
+    </section>
+
+    <section>
+        <h2 id="functional-features">Functional Features</h2>
+        <p>Graphiti's primary function is to enable the creation, management, and querying of knowledge graphs. Users interact with the system through a streamlined API to achieve these goals.</p>
+
+        <h3>Functional Flow Diagram</h3>
+        <div class="diagram-container">
+            <img src="codebase_overall_functional.svg" alt="Functional Flow Diagram">
+        </div>
+
+        <h3>Key Features and Usage</h3>
+        <h4>1. Data Ingestion (<code>add_memory</code>)</h4>
+        <p>Users provide unstructured text or structured JSON data to Graphiti. The system then automatically extracts entities and relationships, generates vector embeddings, and stores this information in the chosen graph database, maintaining temporal context.</p>
+        <pre><code>
+from graphiti_core import Graphiti
+# ... (driver, llm_client, embedder_client setup) ...
+graphiti_instance = Graphiti(driver=my_driver, llm_client=my_llm, embedder_client=my_embedder)
+
+text_data = "John Doe was the CEO of Example Corp from 2020 to 2023. He then became the Chairperson."
+graphiti_instance.add_memory(text_content=text_data, group_id="example_org")
+        </code></pre>
+
+        <h4>2. Querying (<code>search</code>)</h4>
+        <p>Graphiti supports sophisticated querying mechanisms to retrieve relevant facts and entities from the knowledge graph. This includes hybrid search combining multiple techniques for high relevance.</p>
+        <ul>
+            <li><b>Hybrid Search:</b> Combines keyword matching, semantic similarity (using embeddings), and graph traversal to find the most relevant information.</li>
+            <li><b>Temporal Queries:</b> Retrieve facts valid at a specific point in time or within a time range.</li>
+            <li><b>Re-ranking:</b> Search results can be re-ranked based on their proximity to a specified "center node" in the graph, making results more contextually relevant.</li>
+        </ul>
+        <pre><code>
+results = graphiti_instance.search(query="Who is the current leader of Example Corp?", group_id="example_org")
+for result in results:
+    print(f"Fact: {result.type} between {result.source_node.name} and {result.target_node.name}")
+        </code></pre>
+
+        <h4>3. Configurability and Extensibility</h4>
+        <p>Graphiti is designed with extensibility in mind, allowing users to plug in their preferred components for various tasks:</p>
+        <ul>
+            <li><b>Graph Drivers:</b> Support for Neo4j, FalkorDB, Kuzu, and Amazon Neptune.</li>
+            <li><b>LLM Clients:</b> Integrates with OpenAI, Gemini, Anthropic, and local models via Ollama.</li>
+            <li><b>Embedder Clients:</b> Compatible with OpenAI, Gemini, and Ollama for generating vector embeddings.</li>
+        </ul>
+
+        <h4>4. MCP Server (Optional Microservice)</h4>
+        <p>For microservice architectures, the MCP Server provides an API layer over the Graphiti library, allowing other applications to interact with the knowledge graph via HTTP/REST endpoints without direct library integration.</p>
+        <pre><code>
+# Example of an API call to MCP Server (conceptual)
+# POST /add_memory
+# { "text_content": "...", "group_id": "..." }
+
+# GET /search
+# { "query": "...", "group_id": "..." }
+        </code></pre>
+    </section>
+
+    <section>
+        <h2 id="technical-architecture">Technical Architecture</h2>
+        <p>The Graphiti codebase is structured to be modular and extensible, centered around the <code>graphiti_core</code> library and optionally augmented by the <code>mcp_server</code>.</p>
+
+        <h3>Technical Architecture Overview</h3>
+        <div class="diagram-container">
+            <img src="codebase_overall_tech.svg" alt="Technical Architecture Diagram">
+        </div>
+
+        <h3>Core Components and Their Roles</h3>
+        <p>The main components of the Graphiti architecture are:</p>
+
+        <h4>1. <code>graphiti_core</code> Package</h4>
+        <p>This is the heart of the Graphiti system, containing the core logic for graph creation, manipulation, and querying.</p>
+        <ul>
+            <li><b><code>Graphiti</code> Class (<code>graphiti_core/graphiti.py</code>):</b>
+                <p>The central orchestrator. Users instantiate this class to interact with the graph. It coordinates operations between the database driver, LLM client, and embedder client. Key methods include <code>add_memory</code> for ingestion and <code>search</code> for retrieval.</p>
+            </li>
+            <li><b>Database Drivers (<code>graphiti_core/driver/</code>):</b>
+                <p>An abstract base class (<code>GraphDriver</code>) defines the interface for database interactions. Concrete implementations exist for various graph databases (e.g., <code>Neo4jDriver</code>, <code>FalkorDBDriver</code>, <code>KuzuDriver</code>, <code>NeptuneDriver</code>). These drivers handle the low-level persistence and retrieval of nodes and edges.</p>
+                <pre><code>
+class GraphDriver(ABC):
+    @abstractmethod
+    def connect(self):
+        pass
+    # ... other abstract methods for node/edge operations
+                </code></pre>
+            </li>
+            <li><b>LLM Clients (<code>graphiti_core/llm_client/</code>):</b>
+                <p>An abstract base class (<code>LLMClient</code>) provides a unified interface for interacting with Large Language Models. Implementations like <code>OpenAIClient</code>, <code>GeminiClient</code>, and <code>AnthropicClient</code> are used for tasks such as entity and relationship extraction from raw text, and potentially re-ranking search results.</p>
+                <pre><code>
+class LLMClient(ABC):
+    @abstractmethod
+    async def generate_response(self, messages, response_model, **kwargs):
+        pass
+    # ... other abstract methods
+                </code></pre>
+            </li>
+            <li><b>Embedder Clients (<code>graphiti_core/embedder/</code>):</b>
+                <p>An abstract base class (<code>EmbedderClient</code>) defines how vector embeddings are created from text. Implementations such as <code>OpenAIEmbedder</code>, <code>GeminiEmbedder</code>, and <code>OllamaEmbedder</code> are used to convert text into numerical representations for semantic search and similarity calculations.</p>
+                <pre><code>
+class EmbedderClient(ABC):
+    @abstractmethod
+    async def create(self, texts: list[str]) -> list[list[float]]:
+        pass
+                </code></pre>
+            </li>
+            <li><b>Data Models (<code>graphiti_core/nodes.py</code>, <code>graphiti_core/edges.py</code>):</b>
+                <p>These modules define the fundamental data structures representing information in the graph:</p>
+                <ul>
+                    <li><code>EpisodicNode</code>: Represents a unit of ingested raw data (e.g., a document or conversation turn).</li>
+                    <li><code>EntityNode</code>: Represents an entity extracted from the raw data (e.g., a person, organization, concept) with its properties.</li>
+                    <li><code>EntityEdge</code>: Represents a relationship or "fact" between two <code>EntityNode</code>s (e.g., "John DOE -WAS_CEO_OF-> Example Corp"). It includes source, target, type, and properties.</li>
+                </ul>
+            </li>
+        </ul>
+
+        <h4>2. <code>mcp_server</code> Package (Multi-Client Provider Server)</h4>
+        <p>The <code>mcp_server</code> acts as an optional microservice layer built on top of <code>graphiti_core</code>. It exposes Graphiti's functionalities via a web API (e.g., FastAPI), allowing other services or applications to interact with the knowledge graph without directly embedding the Graphiti library.</p>
+        <p>Its primary role is to:</p>
+        <ul>
+            <li>Receive API requests (e.g., to add memory or perform searches).</li>
+            <li>Orchestrate calls to the underlying <code>Graphiti</code> instance.</li>
+            <li>Handle request/response serialization and deserialization.</li>
+            <li>Manage configurable LLM and embedder clients for different use cases.</li>
+        </ul>
+    </section>
+</body>
+</html>

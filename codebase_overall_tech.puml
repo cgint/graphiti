@@ -1,0 +1,103 @@
+@startuml
+package "graphiti_core" {
+    class Graphiti {
+        + __init__(driver, llm_client, embedder_client, ...)
+        + add_memory(text_content, ...)
+        + search(query, ...)
+    }
+
+    package "driver" {
+        abstract class GraphDriver {
+            + connect()
+            + disconnect()
+            + create_node(...)
+            + create_edge(...)
+            + search_nodes(...)
+            + search_edges(...)
+        }
+        class Neo4jDriver
+        class FalkorDBDriver
+        class KuzuDriver
+        class NeptuneDriver
+    }
+
+    package "llm_client" {
+        abstract class LLMClient {
+            + generate_response(...)
+            + extract_entities_and_relations(...)
+        }
+        class OpenAIClient
+        class GeminiClient
+        class AnthropicClient
+        class OpenAIGenericClient
+    }
+
+    package "embedder" {
+        abstract class EmbedderClient {
+            + create_embedding(...)
+        }
+        class OpenAIEmbedder
+        class GeminiEmbedder
+        class OllamaEmbedder
+    }
+
+    package "nodes" {
+        class EpisodicNode {
+            + text_content
+            + created_at
+            + updated_at
+        }
+        class EntityNode {
+            + uuid
+            + name
+            + type
+            + properties
+        }
+    }
+
+    package "edges" {
+        class EntityEdge {
+            + uuid
+            + source_node: EntityNode
+            + target_node: EntityNode
+            + type
+            + properties
+        }
+    }
+
+    Graphiti --> GraphDriver
+    Graphiti --> LLMClient
+    Graphiti --> EmbedderClient
+    Graphiti .up.> EpisodicNode
+    Graphiti .up.> EntityNode
+    Graphiti .up.> EntityEdge
+
+    GraphDriver <.. EpisodicNode
+    GraphDriver <.. EntityNode
+    GraphDriver <.. EntityEdge
+
+    Neo4jDriver .up.|> GraphDriver
+    FalkorDBDriver .up.|> GraphDriver
+    KuzuDriver .up.|> GraphDriver
+    NeptuneDriver .up.|> GraphDriver
+
+    OpenAIClient .up.|> LLMClient
+    GeminiClient .up.|> LLMClient
+    AnthropicClient .up.|> LLMClient
+    OpenAIGenericClient .up.|> LLMClient
+
+    OpenAIEmbedder .up.|> EmbedderClient
+    GeminiEmbedder .up.|> EmbedderClient
+    OllamaEmbedder .up.|> EmbedderClient
+}
+
+package "mcp_server" {
+    class MCPServer {
+        + __init__(graphiti_instance)
+        + start()
+        + /add_memory (API endpoint)
+        + /search (API endpoint)
+    }
+    MCPServer --> Graphiti
+}
+@enduml

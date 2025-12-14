@@ -51,11 +51,13 @@ services:
     image: falkordb/falkordb:latest
     profiles: ["falkordb"]
     ports:
-      - "6379:6379"
+      - "6379:6379"  # Redis/FalkorDB port
+      - "3001:3000"  # FalkorDB web UI (mapped to 3001 since 3000 is in use)
     volumes:
-      - falkordb_data:/data
+      - ./data/falkordb/test1:/var/lib/falkordb/data
     environment:
       - FALKORDB_ARGS=--port 6379 --cluster-enabled no
+      - BROWSER=1  # Enable FalkorDB Browser web UI
     healthcheck:
       test: ["CMD", "redis-cli", "-p", "6379", "ping"]
       interval: 1s
