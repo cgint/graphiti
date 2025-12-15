@@ -1077,7 +1077,7 @@ graphiti_core/
 | Output parsing | Manual JSON extraction | Automatic Pydantic |
 | Retry logic | Reflexion loops | Automatic backtracking |
 | Optimization | Manual prompt tuning | MIPROv2 automated |
-| Error handling | Try/except + retry | dspy.Assert/Refine |
+| Error handling | Try/except + retry | dspy.Refine (Assert/Suggest deprecated) |
 | Entity references | Fragile indices | Robust names |
 
 ---
