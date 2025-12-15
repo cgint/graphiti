@@ -766,8 +766,7 @@ async def main(query_only: bool = False, clear: bool = False, export: bool = Fal
         # For FalkorDB, each scenario uses a separate database.
         # Switch to the scenario's database FIRST, before checking/building indices
         # This ensures indices are created on the correct database where data lives.
-        if scenario != graphiti.driver._database:
-            graphiti.driver = graphiti.driver.clone(database=scenario)
+        graphiti.use_database(scenario)
 
         #################################################
         # ENSURE INDICES EXIST

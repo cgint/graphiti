@@ -318,6 +318,39 @@ class Graphiti:
         """
         await self.driver.close()
 
+    def use_database(self, database: str) -> None:
+        """
+        Switch the active database for all Graphiti operations.
+
+        This method updates both the driver and internal clients to use the specified
+        database. For FalkorDB, this switches to a different graph; for Neo4j, this
+        switches to a different database.
+
+        Parameters
+        ----------
+        database : str
+            The name of the database/graph to switch to.
+
+        Returns
+        -------
+        None
+
+        Notes
+        -----
+        This is useful when you need to perform operations (like search or
+        build_indices_and_constraints) on a specific database without going through
+        add_episode, which handles database switching automatically via group_id.
+
+        Example:
+            graphiti = Graphiti(...)
+            graphiti.use_database('my_project')
+            await graphiti.build_indices_and_constraints()
+            results = await graphiti.search('query', group_ids=['my_project'])
+        """
+        if database != self.driver._database:
+            self.driver = self.driver.clone(database=database)
+            self.clients.driver = self.driver
+
     async def build_indices_and_constraints(self, delete_existing: bool = False):
         """
         Build indices and constraints in the Neo4j database.
