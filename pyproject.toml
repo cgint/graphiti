@@ -36,6 +36,7 @@ neo4j-opensearch = ["boto3>=1.39.16", "opensearch-py>=3.0.0"]
 sentence-transformers = ["sentence-transformers>=3.2.1"]
 neptune = ["langchain-aws>=0.2.29", "opensearch-py>=3.0.0", "boto3>=1.39.16"]
 tracing = ["opentelemetry-api>=1.20.0", "opentelemetry-sdk>=1.20.0"]
+dspy = ["dspy>=2.6.0"]
 dev = [
     "pyright>=1.1.404",
     "groq>=0.2.0",
@@ -61,6 +62,7 @@ dev = [
     "pytest-xdist>=3.6.1",
     "ruff>=0.7.1",
     "opentelemetry-sdk>=1.20.0",
+    "dspy>=2.6.0",
 ]
 
 [build-system]
