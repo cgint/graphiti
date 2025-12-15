@@ -87,7 +87,7 @@ class GeminiClient(LLMClient):
     """
 
     # Class-level constants
-    MAX_RETRIES: ClassVar[int] = 2
+    MAX_RETRIES: ClassVar[int] = 5
 
     def __init__(
         self,
@@ -323,14 +323,17 @@ class GeminiClient(LLMClient):
                 except Exception as e:
                     if raw_output:
                         logger.error(
-                            '🦀 LLM generation failed parsing as JSON, will try to salvage.'
+                            '🦀 LLM generation failed parsing as JSON, will raise error instead of trying to salvage.'
                         )
-                        logger.error(self._get_failed_generation_log(gemini_messages, raw_output))
-                        # Try to salvage
-                        salvaged = self.salvage_json(raw_output)
-                        if salvaged is not None:
-                            logger.warning('Salvaged partial JSON from truncated/malformed output.')
-                            return salvaged
+                        # logger.error(
+                        #     '🦀 LLM generation failed parsing as JSON, will try to salvage.'
+                        # )
+                        # logger.error(self._get_failed_generation_log(gemini_messages, raw_output))
+                        # # Try to salvage
+                        # salvaged = self.salvage_json(raw_output)
+                        # if salvaged is not None:
+                        #     logger.warning('Salvaged partial JSON from truncated/malformed output.')
+                        #     return salvaged
                     raise Exception(f'Failed to parse structured response: {e}') from e
 
             # Otherwise, return the response text as a dictionary

@@ -158,6 +158,66 @@ def parse_wizard_of_oz_paragraphs() -> list[dict]:
     return paragraphs
 
 
+def parse_wizard_of_oz_chapters() -> list[dict]:
+    """Parse woo.txt into chapter-based episodes for coarser-grained knowledge extraction.
+    
+    This approach is better suited for:
+    - Long-form narrative content where chapter context matters
+    - Documents where you want fewer, larger episodes
+    - Cases where cross-paragraph relationships within a chapter are important
+    """
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    woo_path = os.path.join(script_dir, 'woo.txt')
+    
+    with open(woo_path, encoding='utf-8') as f:
+        content = f.read()
+    
+    # Split content by chapter pattern
+    chapter_pattern = r'^Chapter ([IVX]+)\n(.+?)$'
+    chapter_matches = list(re.finditer(chapter_pattern, content, re.MULTILINE))
+    
+    chapters = []
+    
+    for i, chapter_match in enumerate(chapter_matches):
+        chapter_num = chapter_match.group(1)
+        chapter_title = chapter_match.group(2).strip()
+        
+        # Find chapter content boundaries
+        start_pos = chapter_match.end()
+        end_pos = chapter_matches[i + 1].start() if i + 1 < len(chapter_matches) else len(content)
+        chapter_content = content[start_pos:end_pos].strip()
+        
+        # Skip empty chapters
+        if len(chapter_content) < 50:
+            continue
+        
+        chapters.append({
+            'chapter_num': chapter_num,
+            'chapter_title': chapter_title,
+            'chapter_index': i,
+            'content': chapter_content,
+        })
+    
+    return chapters
+
+
+def parse_wizard_of_oz_episodes() -> list[dict]:
+    """Parse woo.txt into chapter-based episodes for coarser-grained knowledge extraction."""
+    episode_list = []
+    for i, e in enumerate(parse_wizard_of_oz_chapters()):
+        name = f'Wizard of Oz - Ch.{e["chapter_num"]} ({e["chapter_title"]})'
+        if 'paragraphs' in e:
+            name += f' - Para {e["paragraph_index"] + 1}'
+        episode_list.append({
+            'name': name,
+            'content': e['content'],
+            'type': EpisodeType.text,
+            'description': 'book chapter',
+            'reference_time': datetime(1900, 1, 1, tzinfo=timezone.utc) + timedelta(hours=i),
+        })
+    return episode_list
+
+
 #################################################
 # ENTITY TYPE DEFINITIONS (Wizard of Oz)
 #################################################
@@ -444,17 +504,8 @@ SCENARIOS = {
             'Where is the Emerald City?',
         ],
         'entity_types': WIZARD_OF_OZ_ENTITY_TYPES,
-        'excluded_entity_types': ['Entity'],  # Skip generic entities like "house", "sky"
-        'episodes': [
-            {
-                'name': f'Wizard of Oz - Ch.{p["chapter_num"]} ({p["chapter_title"]}) - Para {p["paragraph_index"] + 1}',
-                'content': p['content'],
-                'type': EpisodeType.text,
-                'description': 'book paragraph',
-                'reference_time': datetime(1900, 1, 1, tzinfo=timezone.utc) + timedelta(hours=i),
-            }
-            for i, p in enumerate(parse_wizard_of_oz_paragraphs())
-        ],
+        # 'excluded_entity_types': ['Entity'],  # Skip generic entities like "house", "sky"
+        'episodes': parse_wizard_of_oz_episodes(),
     },
 }
 
