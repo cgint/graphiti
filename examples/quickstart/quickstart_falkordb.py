@@ -539,7 +539,8 @@ SCENARIOS = {
         'description': "Know-AI File Starting AI",
         'search_queries': [
             'What does Allen Holub write about?',
-            'Tell me about Larger designs, implemented too far in advance.'
+            'Tell me about Larger designs, implemented too far in advance.',
+            'Tell me about Agile Certifications.'
         ],
         # 'entity_types': KNOW_AI_FILE_STARTING_AI_ENTITY_TYPES,
         # 'excluded_entity_types': ['Entity'],  # Skip generic entities like "house", "sky"
