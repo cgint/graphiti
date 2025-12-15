@@ -19,4 +19,13 @@ from .config import LLMConfig
 from .errors import RateLimitError
 from .openai_client import OpenAIClient
 
-__all__ = ['LLMClient', 'OpenAIClient', 'LLMConfig', 'RateLimitError']
+# Optional DSPy client - import only if dspy is available
+try:
+    from .dspy_client import DSPyClient
+
+    _DSPY_AVAILABLE = True
+except ImportError:
+    DSPyClient = None  # type: ignore[misc, assignment]
+    _DSPY_AVAILABLE = False
+
+__all__ = ['LLMClient', 'OpenAIClient', 'LLMConfig', 'RateLimitError', 'DSPyClient']
