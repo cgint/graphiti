@@ -64,7 +64,7 @@ from graphiti_core.driver.falkordb_driver import FalkorDriver
 from graphiti_core.embedder.gemini import GeminiEmbedder, GeminiEmbedderConfig
 from graphiti_core.llm_client.gemini_client import GeminiClient, LLMConfig
 from graphiti_core.nodes import EpisodeType, EpisodicNode
-from graphiti_core.search.search_config_recipes import NODE_HYBRID_SEARCH_RRF
+from graphiti_core.search import search_config_recipes
 from graphiti_core.search.search_helpers import search_results_to_context_string
 from graphiti_core.utils.maintenance.graph_data_operations import clear_data
 
@@ -534,11 +534,12 @@ SCENARIOS = {
         'excluded_entity_types': ['Entity'],  # Skip generic entities like "house", "sky"
         'episodes': parse_wizard_of_oz_episodes(),
     },
-    'know-ai-file-starting-AI': {
+    'know_ai_file_starting_AI': {
         'name': 'Know-AI File Starting AI',
         'description': "Know-AI File Starting AI",
         'search_queries': [
-            'What is Allen Holub\'s write about?',
+            'What does Allen Holub write about?',
+            'Tell me about Larger designs, implemented too far in advance.'
         ],
         # 'entity_types': KNOW_AI_FILE_STARTING_AI_ENTITY_TYPES,
         # 'excluded_entity_types': ['Entity'],  # Skip generic entities like "house", "sky"
@@ -762,6 +763,12 @@ async def main(query_only: bool = False, clear: bool = False, export: bool = Fal
     )
 
     try:
+        # For FalkorDB, each scenario uses a separate database.
+        # Switch to the scenario's database FIRST, before checking/building indices
+        # This ensures indices are created on the correct database where data lives.
+        if scenario != graphiti.driver._database:
+            graphiti.driver = graphiti.driver.clone(database=scenario)
+
         #################################################
         # ENSURE INDICES EXIST
         #################################################
@@ -781,18 +788,14 @@ async def main(query_only: bool = False, clear: bool = False, export: bool = Fal
             await export_graph_data(graphiti, scenario)
             return
 
-
-        # For FalkorDB, each scenario uses a separate database.
-        # Switch to the scenario's database for all operations (clear, search, etc.)
-        if scenario != graphiti.driver._database:
-            graphiti.driver = graphiti.driver.clone(database=scenario)
-
         if clear:
             print(f'\nClearing graph data for scenario "{scenario}"...')
             await clear_data(graphiti.driver, group_ids=[scenario])
             await graphiti.build_indices_and_constraints()
             print(f'Graph cleared for scenario "{scenario}" and indices rebuilt successfully\n')
 
+        print(f'Building indices for scenario "{scenario}"...')
+        await graphiti.build_indices_and_constraints()
 
         #################################################
         # ADDING EPISODES
@@ -957,7 +960,7 @@ async def main(query_only: bool = False, clear: bool = False, export: bool = Fal
         )
 
         # Use a predefined search configuration recipe and modify its limit
-        node_search_config = NODE_HYBRID_SEARCH_RRF.model_copy(deep=True)
+        node_search_config = search_config_recipes.NODE_HYBRID_SEARCH_RRF.model_copy(deep=True)
         node_search_config.limit = 5  # Limit to 5 results
 
         # Execute the node search
