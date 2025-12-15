@@ -110,6 +110,13 @@ class GraphDriver(ABC):
     async def build_indices_and_constraints(self, delete_existing: bool = False):
         raise NotImplementedError()
 
+    async def has_required_indices(self) -> bool:
+        """Check if required indices exist.
+
+        Returns True by default. Override in drivers that support index checking.
+        """
+        return True
+
     def clone(self, database: str) -> 'GraphDriver':
         """Clone the driver with a different database or graph name."""
         return self

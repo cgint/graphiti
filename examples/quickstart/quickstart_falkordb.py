@@ -49,18 +49,22 @@ import asyncio
 import json
 import logging
 import os
-from datetime import datetime, timezone
-from logging import INFO
+import re
+from datetime import datetime, timedelta, timezone
+from logging import INFO  # noqa: F401
 
 from dotenv import load_dotenv
+from google.genai import types
+from pydantic import BaseModel, Field
 
 from graphiti_core import Graphiti
+from graphiti_core.cross_encoder.gemini_reranker_client import GeminiRerankerClient
 from graphiti_core.driver.falkordb_driver import FalkorDriver
+from graphiti_core.embedder.gemini import GeminiEmbedder, GeminiEmbedderConfig
+from graphiti_core.llm_client.gemini_client import GeminiClient, LLMConfig
 from graphiti_core.nodes import EpisodeType, EpisodicNode
 from graphiti_core.search.search_config_recipes import NODE_HYBRID_SEARCH_RRF
-from graphiti_core.llm_client.gemini_client import GeminiClient, LLMConfig
-from graphiti_core.embedder.gemini import GeminiEmbedder, GeminiEmbedderConfig
-from graphiti_core.cross_encoder.gemini_reranker_client import GeminiRerankerClient
+from graphiti_core.search.search_helpers import search_results_to_context_string
 from graphiti_core.utils.maintenance.graph_data_operations import clear_data
 
 #################################################
@@ -94,10 +98,141 @@ load_dotenv()
 falkor_username = os.environ.get('FALKORDB_USERNAME', None) or None
 falkor_password = os.environ.get('FALKORDB_PASSWORD', None) or None
 falkor_host = os.environ.get('FALKORDB_HOST', 'localhost') or 'localhost'
-falkor_port = os.environ.get('FALKORDB_PORT', '6379') or '6379'
+falkor_port = int(os.environ.get('FALKORDB_PORT', '6379') or '6379')
 
 # Gemini API key configuration
 gemini_api_key = os.environ.get('GEMINI_API_KEY') or os.environ.get('GOOGLE_API_KEY')
+
+
+#################################################
+# HELPER FUNCTIONS
+#################################################
+
+def parse_wizard_of_oz_paragraphs() -> list[dict]:
+    """Parse woo.txt into paragraph-based episodes for finer-grained knowledge extraction.
+    
+    This approach is better suited for:
+    - General text documents (Confluence, wiki pages)
+    - Business content (Jira descriptions, comments)
+    - Any content where paragraphs represent logical semantic units
+    """
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    woo_path = os.path.join(script_dir, 'woo.txt')
+    
+    with open(woo_path, encoding='utf-8') as f:
+        content = f.read()
+    
+    # Split content by chapter pattern to get chapter context
+    chapter_pattern = r'^Chapter ([IVX]+)\n(.+?)$'
+    chapter_matches = list(re.finditer(chapter_pattern, content, re.MULTILINE))
+    
+    paragraphs = []
+    paragraph_index = 0
+    
+    for i, chapter_match in enumerate(chapter_matches):
+        chapter_num = chapter_match.group(1)
+        chapter_title = chapter_match.group(2).strip()
+        
+        # Find chapter content boundaries
+        start_pos = chapter_match.end()
+        end_pos = chapter_matches[i + 1].start() if i + 1 < len(chapter_matches) else len(content)
+        chapter_content = content[start_pos:end_pos].strip()
+        
+        # Split chapter into paragraphs (separated by blank lines)
+        raw_paragraphs = re.split(r'\n\s*\n', chapter_content)
+        
+        for para in raw_paragraphs:
+            para_text = para.strip()
+            # Skip empty paragraphs or very short ones (< 50 chars)
+            if len(para_text) < 50:
+                continue
+            
+            paragraphs.append({
+                'chapter_num': chapter_num,
+                'chapter_title': chapter_title,
+                'paragraph_index': paragraph_index,
+                'content': para_text,
+            })
+            paragraph_index += 1
+    
+    return paragraphs
+
+
+#################################################
+# ENTITY TYPE DEFINITIONS (Wizard of Oz)
+#################################################
+# Custom entity types guide the LLM to extract
+# meaningful entities rather than every noun.
+# The docstrings are critical - they tell the LLM
+# what to extract and what to ignore.
+#################################################
+
+class Character(BaseModel):
+    """A named character in the story - humans, talking animals, or personified beings.
+    
+    Only extract main characters and named individuals, NOT generic people or crowds.
+    Examples: Dorothy, Toto, Scarecrow, Tin Woodman, Cowardly Lion, Wizard of Oz, Wicked Witch.
+    Do NOT extract: "the man", "a farmer", "people", "someone".
+    """
+    role: str = Field(..., description="Character's role: protagonist, antagonist, helper, mentor, etc.")
+
+
+class Place(BaseModel):
+    """A significant named location or region in the story.
+    
+    Only extract named places, NOT generic locations like "house", "road", "field".
+    Examples: Kansas, Land of Oz, Emerald City, Munchkin Country, Yellow Brick Road, Deadly Desert.
+    Do NOT extract: "the house", "a forest", "the road", "outside".
+    """
+    region: str | None = Field(None, description="The larger region this place belongs to, if mentioned")
+
+
+class MagicalObject(BaseModel):
+    """An object with magical properties or major plot significance.
+    
+    Only extract items central to the plot, NOT everyday objects.
+    Examples: Silver Shoes, Golden Cap, Magic Belt, Wizard's balloon.
+    Do NOT extract: "basket", "door", "chair", "food".
+    """
+    powers: str = Field(..., description="What the object does or why it matters to the story")
+
+
+class Event(BaseModel):
+    """A significant story event or occurrence that changes the plot.
+    
+    Only extract major story events, NOT minor actions.
+    Examples: The Cyclone, Dorothy landing on the Witch, Meeting the Scarecrow, Melting of the Wicked Witch.
+    Do NOT extract: "walking", "eating", "sleeping", "talking".
+    """
+    outcome: str = Field(..., description="What resulted from this event")
+
+
+class Quest(BaseModel):
+    """A goal, desire, or mission that drives a character's actions.
+    
+    Examples: Dorothy's journey home, Scarecrow seeking a brain, Tin Woodman seeking a heart, Lion seeking courage.
+    """
+    seeker: str = Field(..., description="The character who wants to achieve this goal")
+
+
+class Group(BaseModel):
+    """A named group, faction, or species of beings.
+    
+    Examples: Munchkins, Winkies, Quadlings, Gillikins, Winged Monkeys, Kalidahs.
+    Do NOT extract: "people", "creatures", "animals".
+    """
+    nature: str = Field(..., description="What kind of beings they are")
+
+
+# Entity types for the Wizard of Oz scenario
+WIZARD_OF_OZ_ENTITY_TYPES: dict[str, type[BaseModel]] = {
+    'Character': Character,
+    'Place': Place,
+    'MagicalObject': MagicalObject,
+    'Event': Event,
+    'Quest': Quest,
+    'Group': Group,
+}
 
 
 #################################################
@@ -112,7 +247,7 @@ SCENARIOS = {
     'politics': {
         'name': 'California Politics',
         'description': 'Political careers and government positions in California',
-        'search_query': 'Who was the California Attorney General?',
+        'search_queries': ['Who was the California Attorney General?'],
         'episodes': [
             {
                 'name': 'Harris - CA Attorney General Background',
@@ -159,7 +294,7 @@ SCENARIOS = {
     'employee': {
         'name': 'Employee Career Journey',
         'description': 'Career progression of Sarah Chen at TechCorp - promotions, team changes, projects',
-        'search_query': 'What is Sarah Chen\'s current role?',
+        'search_queries': ['What is Sarah Chen\'s current role?'],
         'episodes': [
             {
                 'name': 'Sarah Chen - Hiring',
@@ -230,7 +365,7 @@ SCENARIOS = {
     'customer': {
         'name': 'B2B Customer Relationship',
         'description': 'Acme Corp customer journey - contracts, expansions, contact changes',
-        'search_query': 'Who is the primary contact at Acme Corp?',
+        'search_queries': ['Who is the primary contact at Acme Corp?', 'What is the satisfaction score for Acme Corp?'],
         'episodes': [
             {
                 'name': 'Acme Corp - Initial Contract',
@@ -296,6 +431,29 @@ SCENARIOS = {
                 'description': 'contract amendment',
                 'reference_time': datetime(2022, 11, 1, tzinfo=timezone.utc),
             },
+        ],
+    },
+    'wizard_of_oz': {
+        'name': 'The Wizard of Oz',
+        'description': "Dorothy's journey through the Land of Oz (paragraph-level episodes)",
+        'search_queries': [
+            'Who is Dorothy?',
+            'What is Toto?',
+            'Who is the Scarecrow?',
+            'What happened during the cyclone?',
+            'Where is the Emerald City?',
+        ],
+        'entity_types': WIZARD_OF_OZ_ENTITY_TYPES,
+        'excluded_entity_types': ['Entity'],  # Skip generic entities like "house", "sky"
+        'episodes': [
+            {
+                'name': f'Wizard of Oz - Ch.{p["chapter_num"]} ({p["chapter_title"]}) - Para {p["paragraph_index"] + 1}',
+                'content': p['content'],
+                'type': EpisodeType.text,
+                'description': 'book paragraph',
+                'reference_time': datetime(1900, 1, 1, tzinfo=timezone.utc) + timedelta(hours=i),
+            }
+            for i, p in enumerate(parse_wizard_of_oz_paragraphs())
         ],
     },
 }
@@ -487,7 +645,12 @@ async def main(query_only: bool = False, clear: bool = False, export: bool = Fal
         llm_client=GeminiClient(
             config=LLMConfig(
                 api_key=gemini_api_key,
-                model='gemini-2.5-flash'
+                model='gemini-2.5-flash',
+                max_tokens=65000
+            ),
+            thinking_config=types.ThinkingConfig(
+                include_thoughts=False,
+                thinking_budget=0
             )
         ),
         embedder=GeminiEmbedder(
@@ -499,18 +662,22 @@ async def main(query_only: bool = False, clear: bool = False, export: bool = Fal
         cross_encoder=GeminiRerankerClient(
             config=LLMConfig(
                 api_key=gemini_api_key,
-                model='gemini-2.5-flash-lite-preview-06-17'
+                model='gemini-2.5-flash-lite',
+                max_tokens=65000
             )
         )
     )
 
     try:
         #################################################
-        # CLEAR GRAPH (if requested)
+        # ENSURE INDICES EXIST
         #################################################
-        # Clear all data from the graph for a clean start
+        # Check if indices exist and build only if missing
+        # Skip for export-only mode since it doesn't need indices
         #################################################
-        
+        if not export and not clear and not await graphiti.driver.has_required_indices():
+            print('Building indices (first-time setup)...')
+            await graphiti.build_indices_and_constraints()
 
         #################################################
         # EXPORT GRAPH DATA (if requested)
@@ -546,6 +713,15 @@ async def main(query_only: bool = False, clear: bool = False, export: bool = Fal
         if not query_only:
             # Get episodes from the selected scenario
             episodes = selected_scenario['episodes']
+            
+            # Get optional entity types configuration (for focused extraction)
+            entity_types = selected_scenario.get('entity_types')
+            excluded_entity_types = selected_scenario.get('excluded_entity_types')
+            
+            if entity_types:
+                print(f'Using custom entity types: {list(entity_types.keys())}')
+                if excluded_entity_types:
+                    print(f'Excluding entity types: {excluded_entity_types}')
 
             # Add episodes to the graph with temporal information
             episode_uuids = []
@@ -558,6 +734,8 @@ async def main(query_only: bool = False, clear: bool = False, export: bool = Fal
                     source=episode['type'],
                     source_description=episode['description'],
                     reference_time=episode['reference_time'],
+                    entity_types=entity_types,
+                    excluded_entity_types=excluded_entity_types,
                 )
                 episode_uuids.append(result.episode.uuid)
                 print(
@@ -577,62 +755,18 @@ async def main(query_only: bool = False, clear: bool = False, export: bool = Fal
         #################################################
 
         # Perform a hybrid search combining semantic similarity and BM25 retrieval
-        search_query = selected_scenario['search_query']
-        print(f"\nSearching for: '{search_query}'")
-        results = await graphiti.search(search_query)
+        search_queries = selected_scenario['search_queries']
+        for search_query in search_queries:
+            print(f"\nSearching for: '{search_query}'")
+            results = await graphiti.search(search_query)
+            results_search = await graphiti.search_(search_query)
 
-        # Print search results with traceability and temporal information
-        print('\nSearch Results:')
-        for result in results:
-            print(f'UUID: {result.uuid}')
-            print(f'Fact: {result.fact}')
-            
-            # Temporal information
-            if hasattr(result, 'valid_at') and result.valid_at:
-                print(f'Valid from: {result.valid_at}')
-            if hasattr(result, 'invalid_at') and result.invalid_at:
-                print(f'Valid until: {result.invalid_at}')
-            
-            # Traceability: Show source episodes
-            if hasattr(result, 'episodes') and result.episodes:
-                print(f'Source Episodes: {len(result.episodes)} episode(s)')
-                for episode_uuid in result.episodes:
-                    try:
-                        episode = await EpisodicNode.get_by_uuid(graphiti.driver, episode_uuid)
-                        print(f'  - Episode: {episode.name}')
-                        print(f'    Content preview: {episode.content[:80]}...')
-                        print(f'    Valid at: {episode.valid_at}')
-                        print(f'    Source: {episode.source_description}')
-                    except Exception as e:
-                        print(f'  - Episode UUID: {episode_uuid} (could not retrieve: {e})')
-            else:
-                print('Source Episodes: None')
-            
-            print('---')
-
-        #################################################
-        # CENTER NODE SEARCH
-        #################################################
-        # For more contextually relevant results, you can
-        # use a center node to rerank search results based
-        # on their graph distance to a specific node
-        #################################################
-
-        # Use the top search result's UUID as the center node for reranking
-        if results and len(results) > 0:
-            # Get the source node UUID from the top result
-            center_node_uuid = results[0].source_node_uuid
-
-            print('\nReranking search results based on graph distance:')
-            print(f'Using center node UUID: {center_node_uuid}')
-
-            reranked_results = await graphiti.search(
-                search_query, center_node_uuid=center_node_uuid
-            )
-
-            # Print reranked search results with traceability
-            print('\nReranked Search Results:')
-            for result in reranked_results:
+            # Print search results with traceability and temporal information
+            print('\nSearch Results as text:')
+            pretty_results = search_results_to_context_string(results_search)
+            print(pretty_results)
+            print('\n\nSearch Results:')
+            for result in results:
                 print(f'UUID: {result.uuid}')
                 print(f'Fact: {result.fact}')
                 
@@ -645,18 +779,67 @@ async def main(query_only: bool = False, clear: bool = False, export: bool = Fal
                 # Traceability: Show source episodes
                 if hasattr(result, 'episodes') and result.episodes:
                     print(f'Source Episodes: {len(result.episodes)} episode(s)')
-                    for episode_uuid in result.episodes[:2]:  # Show first 2 to avoid clutter
+                    for episode_uuid in result.episodes:
                         try:
                             episode = await EpisodicNode.get_by_uuid(graphiti.driver, episode_uuid)
-                            print(f'  - Episode: {episode.name} (valid at: {episode.valid_at})')
-                        except Exception:
-                            print(f'  - Episode UUID: {episode_uuid}')
-                    if len(result.episodes) > 2:
-                        print(f'  ... and {len(result.episodes) - 2} more episode(s)')
+                            print(f'  - Episode: {episode.name}')
+                            print(f'    Content preview: {episode.content[:80]}...')
+                            print(f'    Valid at: {episode.valid_at}')
+                            print(f'    Source: {episode.source_description}')
+                        except Exception as e:
+                            print(f'  - Episode UUID: {episode_uuid} (could not retrieve: {e})')
+                else:
+                    print('Source Episodes: None')
                 
                 print('---')
-        else:
-            print('No results found in the initial search to use as center node.')
+
+            #################################################
+            # CENTER NODE SEARCH
+            #################################################
+            # For more contextually relevant results, you can
+            # use a center node to rerank search results based
+            # on their graph distance to a specific node
+            #################################################
+
+            # Use the top search result's UUID as the center node for reranking
+            if results and len(results) > 0:
+                # Get the source node UUID from the top result
+                center_node_uuid = results[0].source_node_uuid
+
+                print('\nReranking search results based on graph distance:')
+                print(f'Using center node UUID: {center_node_uuid}')
+
+                reranked_results = await graphiti.search(
+                    search_query, center_node_uuid=center_node_uuid
+                )
+
+                # Print reranked search results with traceability
+                print('\nReranked Search Results:')
+                for result in reranked_results:
+                    print(f'UUID: {result.uuid}')
+                    print(f'Fact: {result.fact}')
+                    
+                    # Temporal information
+                    if hasattr(result, 'valid_at') and result.valid_at:
+                        print(f'Valid from: {result.valid_at}')
+                    if hasattr(result, 'invalid_at') and result.invalid_at:
+                        print(f'Valid until: {result.invalid_at}')
+                    
+                    # Traceability: Show source episodes
+                    if hasattr(result, 'episodes') and result.episodes:
+                        print(f'Source Episodes: {len(result.episodes)} episode(s)')
+                        for episode_uuid in result.episodes[:2]:  # Show first 2 to avoid clutter
+                            try:
+                                episode = await EpisodicNode.get_by_uuid(graphiti.driver, episode_uuid)
+                                print(f'  - Episode: {episode.name} (valid at: {episode.valid_at})')
+                            except Exception:
+                                print(f'  - Episode UUID: {episode_uuid}')
+                        if len(result.episodes) > 2:
+                            print(f'  ... and {len(result.episodes) - 2} more episode(s)')
+                    
+                    print('---')
+            else:
+                print('No results found in the initial search to use as center node.')
 
         #################################################
         # NODE SEARCH USING SEARCH RECIPES
@@ -719,16 +902,18 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description='Graphiti FalkorDB Quickstart Example',
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=f'''
+        epilog='''
 Available Scenarios:
   politics  - California Politics: Political careers and government positions
   employee  - Employee Career Journey: Career progression at TechCorp
   customer  - B2B Customer Relationship: Acme Corp customer journey
+  wizard_of_oz - The Wizard of Oz: Dorothy's journey through the Land of Oz
 
 Examples:
   python quickstart_falkordb.py --scenario employee --clear
   python quickstart_falkordb.py --scenario customer --query-only
   python quickstart_falkordb.py --scenario politics
+  python quickstart_falkordb.py --scenario wizard_of_oz --clear
 ''',
     )
     parser.add_argument(

@@ -150,14 +150,14 @@ class FalkorDriver(GraphDriver):
             self.client = FalkorDB(host=host, port=port, username=username, password=password)
 
         # Schedule the indices and constraints to be built
-        try:
-            # Try to get the current event loop
-            loop = asyncio.get_running_loop()
-            # Schedule the build_indices_and_constraints to run
-            loop.create_task(self.build_indices_and_constraints())
-        except RuntimeError:
-            # No event loop running, this will be handled later
-            pass
+        # try:
+        #     # Try to get the current event loop
+        #     loop = asyncio.get_running_loop()
+        #     # Schedule the build_indices_and_constraints to run
+        #     loop.create_task(self.build_indices_and_constraints())
+        # except RuntimeError:
+        #     # No event loop running, this will be handled later
+        #     pass
 
     def _get_graph(self, graph_name: str | None) -> FalkorGraph:
         # FalkorDB requires a non-None database name for multi-tenant graphs; the default is "default_db"
@@ -241,6 +241,24 @@ class FalkorDriver(GraphDriver):
 
         if drop_tasks:
             await asyncio.gather(*drop_tasks)
+
+    async def has_required_indices(self) -> bool:
+        """Check if the required fulltext indices exist.
+
+        Returns True if all required indices (Entity, Episodic, RELATES_TO) exist,
+        False otherwise. This is a lightweight check to avoid unnecessary
+        index creation calls.
+        """
+        result = await self.execute_query('CALL db.indexes()')
+        if not result:
+            return False
+
+        records, _, _ = result
+        existing_labels = {record['label'] for record in records}
+
+        # Check for the key fulltext indices we need for search
+        required_labels = {'Entity', 'Episodic', 'RELATES_TO'}
+        return required_labels.issubset(existing_labels)
 
     async def build_indices_and_constraints(self, delete_existing=False):
         if delete_existing:
