@@ -46,6 +46,7 @@ limitations under the License.
 
 import argparse
 import asyncio
+import glob
 import json
 import logging
 import os
@@ -154,7 +155,7 @@ def parse_wizard_of_oz_paragraphs() -> list[dict]:
                 'content': para_text,
             })
             paragraph_index += 1
-    
+    print(f"Parsed {len(paragraphs)} paragraphs from woo.txt")
     return paragraphs
 
 
@@ -197,7 +198,7 @@ def parse_wizard_of_oz_chapters() -> list[dict]:
             'chapter_index': i,
             'content': chapter_content,
         })
-    
+    print(f"Parsed {len(chapters)} chapters from woo.txt")
     return chapters
 
 
@@ -215,8 +216,34 @@ def parse_wizard_of_oz_episodes() -> list[dict]:
             'description': 'book chapter',
             'reference_time': datetime(1900, 1, 1, tzinfo=timezone.utc) + timedelta(hours=i),
         })
+    print(f"Parsed {len(episode_list)} episodes from woo.txt")
     return episode_list
 
+def parse_know_ai_files_to_episodes(dir_path: str, file_pattern: str) -> list[dict]:
+    """Parse know-ai files to episodes, splitting by empty lines."""
+    episode_list = []
+    for file in glob.glob(os.path.join(dir_path, file_pattern)):
+        with open(file, encoding='utf-8') as f:
+            content = f.read()
+        name = os.path.basename(file)
+        # Split by one or more empty lines (double newlines)
+        sections = re.split(r'\n\s*\n', content)
+        for idx, section in enumerate(sections):
+            section = section.strip()
+            if not section:
+                continue
+            # Use first line as section title if available
+            first_line = section.split('\n', 1)[0][:80]
+            episode_list.append({
+                'name': f'{name}::{idx}::{first_line}',
+                'content': section,
+                'type': EpisodeType.text,
+                'description': f'know-ai file: {name} - section {idx}: {first_line}',
+                'reference_time': datetime.now(timezone.utc),
+            })
+
+    print(f"Parsed {len(episode_list)} episodes from {dir_path} with pattern {file_pattern}")
+    return episode_list
 
 #################################################
 # ENTITY TYPE DEFINITIONS (Wizard of Oz)
@@ -504,15 +531,28 @@ SCENARIOS = {
             'Where is the Emerald City?',
         ],
         'entity_types': WIZARD_OF_OZ_ENTITY_TYPES,
-        # 'excluded_entity_types': ['Entity'],  # Skip generic entities like "house", "sky"
+        'excluded_entity_types': ['Entity'],  # Skip generic entities like "house", "sky"
         'episodes': parse_wizard_of_oz_episodes(),
     },
+    'know-ai-file-starting-AI': {
+        'name': 'Know-AI File Starting AI',
+        'description': "Know-AI File Starting AI",
+        'search_queries': [
+            'What is Allen Holub\'s write about?',
+        ],
+        # 'entity_types': KNOW_AI_FILE_STARTING_AI_ENTITY_TYPES,
+        # 'excluded_entity_types': ['Entity'],  # Skip generic entities like "house", "sky"
+        'episodes': parse_know_ai_files_to_episodes("examples/quickstart/know-ai", "Allen_Holub_*.txt"),
+    }
 }
 
 
-async def export_graph_data(graphiti: Graphiti):
-    """Exports all nodes and relationships to JSONL files."""
-    print("\nStarting graph data export to JSONL files...")
+async def export_graph_data(graphiti: Graphiti, scenario: str):
+    """Exports all nodes and relationships to JSONL files for a specific scenario."""
+    print(f"\nStarting graph data export for scenario '{scenario}' to JSONL files...")
+    
+    # Switch driver to the scenario's database
+    graphiti.driver = graphiti.driver.clone(database=scenario)
 
     # Collect all nodes
     all_nodes = []
@@ -588,11 +628,12 @@ async def export_graph_data(graphiti: Graphiti):
         })
     print(f"Found {len(community_records)} community nodes")
 
-    # Write all nodes to single file
-    with open("exported_nodes.jsonl", "w", encoding="utf-8") as f:
+    # Write all nodes to single file (named by scenario)
+    nodes_filename = f"exported_nodes_{scenario}.jsonl"
+    with open(nodes_filename, "w", encoding="utf-8") as f:
         for node in all_nodes:
             f.write(json.dumps(node, ensure_ascii=False) + "\n")
-    print(f"Exported {len(all_nodes)} total nodes to exported_nodes.jsonl")
+    print(f"Exported {len(all_nodes)} total nodes to {nodes_filename}")
 
     # Collect all edges
     all_edges = []
@@ -667,13 +708,14 @@ async def export_graph_data(graphiti: Graphiti):
         })
     print(f"Found {len(has_member_records)} HAS_MEMBER edges")
 
-    # Write all edges to single file
-    with open("exported_edges.jsonl", "w", encoding="utf-8") as f:
+    # Write all edges to single file (named by scenario)
+    edges_filename = f"exported_edges_{scenario}.jsonl"
+    with open(edges_filename, "w", encoding="utf-8") as f:
         for edge in all_edges:
             f.write(json.dumps(edge, ensure_ascii=False) + "\n")
-    print(f"Exported {len(all_edges)} total edges to exported_edges.jsonl")
+    print(f"Exported {len(all_edges)} total edges to {edges_filename}")
 
-    print("\nGraph data export completed.")
+    print(f"\nGraph data export for scenario '{scenario}' completed.")
     print(f"Summary: {len(all_nodes)} nodes, {len(all_edges)} edges")
 
 async def main(query_only: bool = False, clear: bool = False, export: bool = False, scenario: str = 'politics'):
@@ -736,15 +778,20 @@ async def main(query_only: bool = False, clear: bool = False, export: bool = Fal
         # Export all nodes and relationships to JSONL files
         #################################################
         if export:
-            await export_graph_data(graphiti)
+            await export_graph_data(graphiti, scenario)
             return
 
 
+        # For FalkorDB, each scenario uses a separate database.
+        # Switch to the scenario's database for all operations (clear, search, etc.)
+        if scenario != graphiti.driver._database:
+            graphiti.driver = graphiti.driver.clone(database=scenario)
+
         if clear:
-            print('\nClearing graph data for clean install...')
-            await clear_data(graphiti.driver)
+            print(f'\nClearing graph data for scenario "{scenario}"...')
+            await clear_data(graphiti.driver, group_ids=[scenario])
             await graphiti.build_indices_and_constraints()
-            print('Graph cleared and indices rebuilt successfully\n')
+            print(f'Graph cleared for scenario "{scenario}" and indices rebuilt successfully\n')
 
 
         #################################################
@@ -775,6 +822,7 @@ async def main(query_only: bool = False, clear: bool = False, export: bool = Fal
                     print(f'Excluding entity types: {excluded_entity_types}')
 
             # Add episodes to the graph with temporal information
+            # Use scenario name as group_id to create separate FalkorDB database per scenario
             episode_uuids = []
             for episode in episodes:
                 result = await graphiti.add_episode(
@@ -785,6 +833,7 @@ async def main(query_only: bool = False, clear: bool = False, export: bool = Fal
                     source=episode['type'],
                     source_description=episode['description'],
                     reference_time=episode['reference_time'],
+                    group_id=scenario,
                     entity_types=entity_types,
                     excluded_entity_types=excluded_entity_types,
                 )
@@ -806,11 +855,12 @@ async def main(query_only: bool = False, clear: bool = False, export: bool = Fal
         #################################################
 
         # Perform a hybrid search combining semantic similarity and BM25 retrieval
+        # Use group_ids to scope search to the current scenario's database
         search_queries = selected_scenario['search_queries']
         for search_query in search_queries:
             print(f"\nSearching for: '{search_query}'")
-            results = await graphiti.search(search_query)
-            results_search = await graphiti.search_(search_query)
+            results = await graphiti.search(search_query, group_ids=[scenario])
+            results_search = await graphiti.search_(search_query, group_ids=[scenario])
 
             # Print search results with traceability and temporal information
             print('\nSearch Results as text:')
@@ -861,7 +911,7 @@ async def main(query_only: bool = False, clear: bool = False, export: bool = Fal
                 print(f'Using center node UUID: {center_node_uuid}')
 
                 reranked_results = await graphiti.search(
-                    search_query, center_node_uuid=center_node_uuid
+                    search_query, center_node_uuid=center_node_uuid, group_ids=[scenario]
                 )
 
                 # Print reranked search results with traceability
@@ -914,6 +964,7 @@ async def main(query_only: bool = False, clear: bool = False, export: bool = Fal
         node_search_results = await graphiti._search(
             query='California Governor',
             config=node_search_config,
+            group_ids=[scenario],
         )
 
         # Print node search results
