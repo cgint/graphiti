@@ -306,12 +306,13 @@ class FalkorDriver(GraphDriver):
 
     def sanitize(self, query: str) -> str:
         """
-        Replace FalkorDB special characters with whitespace.
-        Based on FalkorDB tokenization rules: ,.<>{}[]"':;!@#$%^&*()-+=~
+        Replace special characters with whitespace for RediSearch fulltext queries.
+        Handles both ASCII punctuation (FalkorDB tokenization rules) and common
+        Unicode typographic characters from documents/PDFs.
         """
-        # FalkorDB separator characters that break text into tokens
         separator_map = str.maketrans(
             {
+                # ASCII punctuation (FalkorDB tokenization rules)
                 ',': ' ',
                 '.': ' ',
                 '<': ' ',
@@ -339,6 +340,20 @@ class FalkorDriver(GraphDriver):
                 '=': ' ',
                 '~': ' ',
                 '?': ' ',
+                '/': ' ',
+                '\\': ' ',
+                # Unicode typographic characters (common in PDFs/documents)
+                '\u2013': ' ',  # en-dash –
+                '\u2014': ' ',  # em-dash —
+                '\u201c': ' ',  # left double quote "
+                '\u201d': ' ',  # right double quote "
+                '\u2018': ' ',  # left single quote '
+                '\u2019': ' ',  # right single quote '
+                '\u2026': ' ',  # ellipsis …
+                '\u2022': ' ',  # bullet •
+                '\u00b7': ' ',  # middle dot ·
+                '\u00ab': ' ',  # left guillemet «
+                '\u00bb': ' ',  # right guillemet »
             }
         )
         sanitized = query.translate(separator_map)
@@ -366,9 +381,17 @@ class FalkorDriver(GraphDriver):
 
         sanitized_query = self.sanitize(query)
 
-        # Remove stopwords from the sanitized query
+        # Keep only meaningful words: must contain alphanumeric chars and not be a stopword
         query_words = sanitized_query.split()
-        filtered_words = [word for word in query_words if word.lower() not in STOPWORDS]
+        filtered_words = [
+            word for word in query_words
+            if any(c.isalnum() for c in word) and word.lower() not in STOPWORDS
+        ]
+
+        # No meaningful words to search for
+        if not filtered_words:
+            return ''
+
         sanitized_query = ' | '.join(filtered_words)
 
         # If the query is too long return no query

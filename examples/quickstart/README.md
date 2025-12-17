@@ -18,6 +18,7 @@ This example demonstrates the basic functionality of Graphiti, including:
   - A local DBMS created and started in Neo4j Desktop  
 - **For FalkorDB**:
   - FalkorDB server running (see [FalkorDB documentation](https://docs.falkordb.com) for setup)
+  - **Quick start with Docker Compose**: Run `docker compose --profile falkordb up -d falkordb` from the project root to start FalkorDB
 - **For Amazon Neptune**:
   - Amazon server running (see [Amazon Neptune documentation](https://aws.amazon.com/neptune/developer-resources/) for setup)
 
@@ -30,7 +31,19 @@ This example demonstrates the basic functionality of Graphiti, including:
 pip install graphiti-core
 ```
 
-2. Set up environment variables:
+2. Start FalkorDB (if using FalkorDB):
+
+```bash
+# From the project root directory, start FalkorDB using docker-compose
+docker compose --profile falkordb up -d falkordb
+```
+
+This will start FalkorDB on port 6379. To stop it later, run:
+```bash
+docker compose --profile falkordb stop falkordb
+```
+
+3. Set up environment variables:
 
 ```bash
 # Required for LLM and embedding
@@ -57,7 +70,7 @@ TIP: For Amazon Neptune host string please use the following formats
 * For Neptune Database: `neptune-db://<cluster endpoint>`
 * For Neptune Analytics: `neptune-graph://<graph identifier>`
 
-3. Run the example:
+4. Run the example:
 
 ```bash
 python quickstart_neo4j.py

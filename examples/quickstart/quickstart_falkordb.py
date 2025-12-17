@@ -545,6 +545,14 @@ SCENARIOS = {
         # 'entity_types': KNOW_AI_FILE_STARTING_AI_ENTITY_TYPES,
         # 'excluded_entity_types': ['Entity'],  # Skip generic entities like "house", "sky"
         'episodes': parse_know_ai_files_to_episodes("examples/quickstart/know-ai", "Allen_Holub_*.txt"),
+    },
+    'ssi_schaefer': {
+        'name': 'SSI Schaefer',
+        'description': "SSI Schaefer",
+        'search_queries': [
+            'What is SSI Schaefer?',
+        ],
+        'episodes': parse_know_ai_files_to_episodes("/Users/christian.gintenreiter/dev/Workspace-INTERNAL/split-data-agentspace/case-0-patient-zero-data/auto-eval/scenarios/patient-zero-schaefer/UseCase-0-SSI-Schaefer-addon-TXT", "*.txt"),
     }
 }
 
@@ -828,23 +836,38 @@ async def main(query_only: bool = False, clear: bool = False, export: bool = Fal
             # Use scenario name as group_id to create separate FalkorDB database per scenario
             episode_uuids = []
             for episode in episodes:
-                result = await graphiti.add_episode(
-                    name=episode['name'],
-                    episode_body=episode['content']
-                    if isinstance(episode['content'], str)
-                    else json.dumps(episode['content']),
-                    source=episode['type'],
-                    source_description=episode['description'],
-                    reference_time=episode['reference_time'],
-                    group_id=scenario,
-                    entity_types=entity_types,
-                    excluded_entity_types=excluded_entity_types,
-                )
-                episode_uuids.append(result.episode.uuid)
-                print(
-                    f'Added episode: {episode["name"]} ({episode["type"].value}) '
-                    f'at {episode["reference_time"].strftime("%Y-%m-%d")}'
-                )
+                # Retry logic for transient network errors
+                max_retries = 3
+                retry_delay = 2  # seconds
+                for attempt in range(max_retries):
+                    try:
+                        result = await graphiti.add_episode(
+                            name=episode['name'],
+                            episode_body=episode['content']
+                            if isinstance(episode['content'], str)
+                            else json.dumps(episode['content']),
+                            source=episode['type'],
+                            source_description=episode['description'],
+                            reference_time=episode['reference_time'],
+                            group_id=scenario,
+                            entity_types=entity_types,
+                            excluded_entity_types=excluded_entity_types,
+                        )
+                        episode_uuids.append(result.episode.uuid)
+                        print(
+                            f'Added episode: {episode["name"]} ({episode["type"].value}) '
+                            f'at {episode["reference_time"].strftime("%Y-%m-%d")}'
+                        )
+                        break  # Success, exit retry loop
+                    except Exception as e:
+                        if attempt < max_retries - 1:
+                            print(f'Attempt {attempt + 1} failed for episode "{episode["name"]}": {e}')
+                            print(f'Retrying in {retry_delay} seconds...')
+                            await asyncio.sleep(retry_delay)
+                            retry_delay *= 2  # Exponential backoff
+                        else:
+                            print(f'All {max_retries} attempts failed for episode "{episode["name"]}"')
+                            raise
         else:
             print('\nQuery-only mode: Skipping episode addition to preserve existing data')
 
