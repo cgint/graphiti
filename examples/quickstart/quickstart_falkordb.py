@@ -52,7 +52,8 @@ import logging
 import os
 import re
 from datetime import datetime, timedelta, timezone
-from logging import INFO  # noqa: F401
+from logging import INFO
+from typing import Any  # noqa: F401
 
 from dotenv import load_dotenv
 from google.genai import types
@@ -219,15 +220,27 @@ def parse_wizard_of_oz_episodes() -> list[dict]:
     print(f"Parsed {len(episode_list)} episodes from woo.txt")
     return episode_list
 
-def parse_know_ai_files_to_episodes(dir_path: str, file_pattern: str) -> list[dict]:
-    """Parse know-ai files to episodes, splitting by empty lines."""
+def parse_files_to_episodes(dir_path: str, files: list[str]) -> list[dict]:
     episode_list = []
-    for file in glob.glob(os.path.join(dir_path, file_pattern)):
-        with open(file, encoding='utf-8') as f:
+    for file in files:
+        file_path = os.path.join(dir_path, file)
+        with open(file_path, encoding='utf-8') as f:
             content = f.read()
         name = os.path.basename(file)
-        # Split by one or more empty lines (double newlines)
-        sections = re.split(r'\n\s*\n', content)
+        if len(content) < 2000:
+            sections = [content]
+        else:
+            # Split by markdown headings or empty lines (more sophisticated splitting)
+            if re.search(r'^## ', content, re.MULTILINE):
+                # Split by level 2 headings, keeping the heading with its content
+                sections = re.split(r'(?=^## )', content, flags=re.MULTILINE)
+            elif re.search(r'^# ', content, re.MULTILINE):
+                # Split by level 1 headings, keeping the heading with its content
+                sections = re.split(r'(?=^# )', content, flags=re.MULTILINE)
+            else:
+                # Fallback: split by one or more empty lines (double newlines)
+                sections = re.split(r'\n\s*\n', content)
+
         for idx, section in enumerate(sections):
             section = section.strip()
             if not section:
@@ -242,8 +255,15 @@ def parse_know_ai_files_to_episodes(dir_path: str, file_pattern: str) -> list[di
                 'reference_time': datetime.now(timezone.utc),
             })
 
-    print(f"Parsed {len(episode_list)} episodes from {dir_path} with pattern {file_pattern}")
+    print(f"Parsed {len(episode_list)} episodes from {dir_path} with files {files}")
+    for idx, episode in enumerate(episode_list):
+        print(f"  - Episode {idx} has {len(episode['content'])} chars and starts with: '{episode['content'][:50]}'.")
     return episode_list
+
+def parse_file_pattern_to_episodes(dir_path: str, file_pattern: str) -> list[dict]:
+    """Parse know-ai files to episodes, splitting by empty lines."""
+    return parse_files_to_episodes(dir_path, glob.glob(os.path.join(dir_path, file_pattern)))
+
 
 #################################################
 # ENTITY TYPE DEFINITIONS (Wizard of Oz)
@@ -544,7 +564,7 @@ SCENARIOS = {
         ],
         # 'entity_types': KNOW_AI_FILE_STARTING_AI_ENTITY_TYPES,
         # 'excluded_entity_types': ['Entity'],  # Skip generic entities like "house", "sky"
-        'episodes': parse_know_ai_files_to_episodes("examples/quickstart/know-ai", "Allen_Holub_*.txt"),
+        'episodes': parse_file_pattern_to_episodes("examples/quickstart/know-ai", "Allen_Holub_*.txt"),
     },
     'ssi_schaefer': {
         'name': 'SSI Schaefer',
@@ -552,7 +572,15 @@ SCENARIOS = {
         'search_queries': [
             'What is SSI Schaefer?',
         ],
-        'episodes': parse_know_ai_files_to_episodes("/Users/christian.gintenreiter/dev/Workspace-INTERNAL/split-data-agentspace/case-0-patient-zero-data/auto-eval/scenarios/patient-zero-schaefer/UseCase-0-SSI-Schaefer-addon-TXT", "*.txt"),
+        'episodes': parse_files_to_episodes(
+            "/Users/christian.gintenreiter/dev/Workspace-INTERNAL/split-data-agentspace/case-0-patient-zero-data/auto-eval/scenarios/patient-zero-schaefer/UseCase-0-SSI-Schaefer-addon-TXT", 
+            [
+                "client_team_md.txt",
+                "DATA_SCHEMA_DOCUMENTATION_md.txt",
+                "glossary_consolidated.md.txt",
+                "SCHAEFERSHOP_CLIENT_PROFILE_md.txt",
+                "smec_Organigram_curated_md.txt",
+            ]),
     }
 }
 
@@ -835,12 +863,16 @@ async def main(query_only: bool = False, clear: bool = False, export: bool = Fal
             # Add episodes to the graph with temporal information
             # Use scenario name as group_id to create separate FalkorDB database per scenario
             episode_uuids = []
-            for episode in episodes:
+            for idx, episode in enumerate(episodes):
                 # Retry logic for transient network errors
                 max_retries = 3
                 retry_delay = 2  # seconds
                 for attempt in range(max_retries):
                     try:
+                        print(
+                            f'Adding episode {idx}: {episode["name"]} ({episode["type"].value}) '
+                            f'at {episode["reference_time"].strftime("%Y-%m-%d")} with content length {len(episode["content"])}'
+                        )
                         result = await graphiti.add_episode(
                             name=episode['name'],
                             episode_body=episode['content']
@@ -855,18 +887,18 @@ async def main(query_only: bool = False, clear: bool = False, export: bool = Fal
                         )
                         episode_uuids.append(result.episode.uuid)
                         print(
-                            f'Added episode: {episode["name"]} ({episode["type"].value}) '
+                            f'Added episode {idx}: {episode["name"]} ({episode["type"].value}) '
                             f'at {episode["reference_time"].strftime("%Y-%m-%d")}'
                         )
                         break  # Success, exit retry loop
                     except Exception as e:
                         if attempt < max_retries - 1:
-                            print(f'Attempt {attempt + 1} failed for episode "{episode["name"]}": {e}')
+                            print(f'Attempt {attempt + 1} failed for episode {idx}: "{episode["name"]}": {e}')
                             print(f'Retrying in {retry_delay} seconds...')
                             await asyncio.sleep(retry_delay)
                             retry_delay *= 2  # Exponential backoff
                         else:
-                            print(f'All {max_retries} attempts failed for episode "{episode["name"]}"')
+                            print(f'All {max_retries} attempts failed for episode {idx}: "{episode["name"]}"')
                             raise
         else:
             print('\nQuery-only mode: Skipping episode addition to preserve existing data')
