@@ -756,6 +756,146 @@ async def export_graph_data(graphiti: Graphiti, scenario: str):
     print(f"\nGraph data export for scenario '{scenario}' completed.")
     print(f"Summary: {len(all_nodes)} nodes, {len(all_edges)} edges")
 
+
+async def perform_query_collect_results(graphiti: Graphiti, search_queries: list[str], scenario: str) -> str:
+
+    #################################################
+    # BASIC SEARCH
+    #################################################
+    # The simplest way to retrieve relationships (edges)
+    # from Graphiti is using the search method, which
+    # performs a hybrid search combining semantic
+    # similarity and BM25 text retrieval.
+    #################################################
+
+    # Perform a hybrid search combining semantic similarity and BM25 retrieval
+    # Use group_ids to scope search to the current scenario's database
+    for search_query in search_queries:
+        print(f"\nSearching for: '{search_query}'")
+        results = await graphiti.search(search_query, group_ids=[scenario])
+        results_search = await graphiti.search_(search_query, group_ids=[scenario])
+
+        # Print search results with traceability and temporal information
+        print('\nSearch Results as text:')
+        pretty_results = search_results_to_context_string(results_search)
+        print(pretty_results)
+        print('\n\nSearch Results:')
+        for result in results:
+            print(f'UUID: {result.uuid}')
+            print(f'Fact: {result.fact}')
+            
+            # Temporal information
+            if hasattr(result, 'valid_at') and result.valid_at:
+                print(f'Valid from: {result.valid_at}')
+            if hasattr(result, 'invalid_at') and result.invalid_at:
+                print(f'Valid until: {result.invalid_at}')
+            
+            # Traceability: Show source episodes
+            if hasattr(result, 'episodes') and result.episodes:
+                print(f'Source Episodes: {len(result.episodes)} episode(s)')
+                for episode_uuid in result.episodes:
+                    try:
+                        episode = await EpisodicNode.get_by_uuid(graphiti.driver, episode_uuid)
+                        print(f'  - Episode: {episode.name}')
+                        print(f'    Content preview: {episode.content[:80]}...')
+                        print(f'    Valid at: {episode.valid_at}')
+                        print(f'    Source: {episode.source_description}')
+                    except Exception as e:
+                        print(f'  - Episode UUID: {episode_uuid} (could not retrieve: {e})')
+            else:
+                print('Source Episodes: None')
+            
+            print('---')
+
+        #################################################
+        # CENTER NODE SEARCH
+        #################################################
+        # For more contextually relevant results, you can
+        # use a center node to rerank search results based
+        # on their graph distance to a specific node
+        #################################################
+
+        # Use the top search result's UUID as the center node for reranking
+        if results and len(results) > 0:
+            # Get the source node UUID from the top result
+            center_node_uuid = results[0].source_node_uuid
+
+            print('\nReranking search results based on graph distance:')
+            print(f'Using center node UUID: {center_node_uuid}')
+
+            reranked_results = await graphiti.search(
+                search_query, center_node_uuid=center_node_uuid, group_ids=[scenario]
+            )
+
+            # Print reranked search results with traceability
+            print('\nReranked Search Results:')
+            for result in reranked_results:
+                print(f'UUID: {result.uuid}')
+                print(f'Fact: {result.fact}')
+                
+                # Temporal information
+                if hasattr(result, 'valid_at') and result.valid_at:
+                    print(f'Valid from: {result.valid_at}')
+                if hasattr(result, 'invalid_at') and result.invalid_at:
+                    print(f'Valid until: {result.invalid_at}')
+                
+                # Traceability: Show source episodes
+                if hasattr(result, 'episodes') and result.episodes:
+                    print(f'Source Episodes: {len(result.episodes)} episode(s)')
+                    for episode_uuid in result.episodes[:2]:  # Show first 2 to avoid clutter
+                        try:
+                            episode = await EpisodicNode.get_by_uuid(graphiti.driver, episode_uuid)
+                            print(f'  - Episode: {episode.name} (valid at: {episode.valid_at})')
+                        except Exception:
+                            print(f'  - Episode UUID: {episode_uuid}')
+                    if len(result.episodes) > 2:
+                        print(f'  ... and {len(result.episodes) - 2} more episode(s)')
+                
+                print('---')
+        else:
+            print('No results found in the initial search to use as center node.')
+
+    #################################################
+    # NODE SEARCH USING SEARCH RECIPES
+    #################################################
+    # Graphiti provides predefined search recipes
+    # optimized for different search scenarios.
+    # Here we use NODE_HYBRID_SEARCH_RRF for retrieving
+    # nodes directly instead of edges.
+    #################################################
+
+    # Example: Perform a node search using _search method with standard recipes
+    print(
+        '\nPerforming node search using _search method with standard recipe NODE_HYBRID_SEARCH_RRF:'
+    )
+
+    # Use a predefined search configuration recipe and modify its limit
+    node_search_config = search_config_recipes.NODE_HYBRID_SEARCH_RRF.model_copy(deep=True)
+    node_search_config.limit = 5  # Limit to 5 results
+
+    # Execute the node search
+    node_search_results = await graphiti._search(
+        query='California Governor',
+        config=node_search_config,
+        group_ids=[scenario],
+    )
+
+    # Print node search results
+    print('\nNode Search Results:')
+    for node in node_search_results.nodes:
+        print(f'Node UUID: {node.uuid}')
+        print(f'Node Name: {node.name}')
+        node_summary = node.summary[:100] + '...' if len(node.summary) > 100 else node.summary
+        print(f'Content Summary: {node_summary}')
+        print(f'Node Labels: {", ".join(node.labels)}')
+        print(f'Created At: {node.created_at}')
+        if hasattr(node, 'attributes') and node.attributes:
+            print('Attributes:')
+            for key, value in node.attributes.items():
+                print(f'  {key}: {value}')
+        print('---')
+
+
 async def main(query_only: bool = False, clear: bool = False, export: bool = False, scenario: str = 'politics'):
     #################################################
     # INITIALIZATION
@@ -903,143 +1043,9 @@ async def main(query_only: bool = False, clear: bool = False, export: bool = Fal
         else:
             print('\nQuery-only mode: Skipping episode addition to preserve existing data')
 
-        #################################################
-        # BASIC SEARCH
-        #################################################
-        # The simplest way to retrieve relationships (edges)
-        # from Graphiti is using the search method, which
-        # performs a hybrid search combining semantic
-        # similarity and BM25 text retrieval.
-        #################################################
-
-        # Perform a hybrid search combining semantic similarity and BM25 retrieval
-        # Use group_ids to scope search to the current scenario's database
         search_queries = selected_scenario['search_queries']
-        for search_query in search_queries:
-            print(f"\nSearching for: '{search_query}'")
-            results = await graphiti.search(search_query, group_ids=[scenario])
-            results_search = await graphiti.search_(search_query, group_ids=[scenario])
-
-            # Print search results with traceability and temporal information
-            print('\nSearch Results as text:')
-            pretty_results = search_results_to_context_string(results_search)
-            print(pretty_results)
-            print('\n\nSearch Results:')
-            for result in results:
-                print(f'UUID: {result.uuid}')
-                print(f'Fact: {result.fact}')
-                
-                # Temporal information
-                if hasattr(result, 'valid_at') and result.valid_at:
-                    print(f'Valid from: {result.valid_at}')
-                if hasattr(result, 'invalid_at') and result.invalid_at:
-                    print(f'Valid until: {result.invalid_at}')
-                
-                # Traceability: Show source episodes
-                if hasattr(result, 'episodes') and result.episodes:
-                    print(f'Source Episodes: {len(result.episodes)} episode(s)')
-                    for episode_uuid in result.episodes:
-                        try:
-                            episode = await EpisodicNode.get_by_uuid(graphiti.driver, episode_uuid)
-                            print(f'  - Episode: {episode.name}')
-                            print(f'    Content preview: {episode.content[:80]}...')
-                            print(f'    Valid at: {episode.valid_at}')
-                            print(f'    Source: {episode.source_description}')
-                        except Exception as e:
-                            print(f'  - Episode UUID: {episode_uuid} (could not retrieve: {e})')
-                else:
-                    print('Source Episodes: None')
-                
-                print('---')
-
-            #################################################
-            # CENTER NODE SEARCH
-            #################################################
-            # For more contextually relevant results, you can
-            # use a center node to rerank search results based
-            # on their graph distance to a specific node
-            #################################################
-
-            # Use the top search result's UUID as the center node for reranking
-            if results and len(results) > 0:
-                # Get the source node UUID from the top result
-                center_node_uuid = results[0].source_node_uuid
-
-                print('\nReranking search results based on graph distance:')
-                print(f'Using center node UUID: {center_node_uuid}')
-
-                reranked_results = await graphiti.search(
-                    search_query, center_node_uuid=center_node_uuid, group_ids=[scenario]
-                )
-
-                # Print reranked search results with traceability
-                print('\nReranked Search Results:')
-                for result in reranked_results:
-                    print(f'UUID: {result.uuid}')
-                    print(f'Fact: {result.fact}')
-                    
-                    # Temporal information
-                    if hasattr(result, 'valid_at') and result.valid_at:
-                        print(f'Valid from: {result.valid_at}')
-                    if hasattr(result, 'invalid_at') and result.invalid_at:
-                        print(f'Valid until: {result.invalid_at}')
-                    
-                    # Traceability: Show source episodes
-                    if hasattr(result, 'episodes') and result.episodes:
-                        print(f'Source Episodes: {len(result.episodes)} episode(s)')
-                        for episode_uuid in result.episodes[:2]:  # Show first 2 to avoid clutter
-                            try:
-                                episode = await EpisodicNode.get_by_uuid(graphiti.driver, episode_uuid)
-                                print(f'  - Episode: {episode.name} (valid at: {episode.valid_at})')
-                            except Exception:
-                                print(f'  - Episode UUID: {episode_uuid}')
-                        if len(result.episodes) > 2:
-                            print(f'  ... and {len(result.episodes) - 2} more episode(s)')
-                    
-                    print('---')
-            else:
-                print('No results found in the initial search to use as center node.')
-
-        #################################################
-        # NODE SEARCH USING SEARCH RECIPES
-        #################################################
-        # Graphiti provides predefined search recipes
-        # optimized for different search scenarios.
-        # Here we use NODE_HYBRID_SEARCH_RRF for retrieving
-        # nodes directly instead of edges.
-        #################################################
-
-        # Example: Perform a node search using _search method with standard recipes
-        print(
-            '\nPerforming node search using _search method with standard recipe NODE_HYBRID_SEARCH_RRF:'
-        )
-
-        # Use a predefined search configuration recipe and modify its limit
-        node_search_config = search_config_recipes.NODE_HYBRID_SEARCH_RRF.model_copy(deep=True)
-        node_search_config.limit = 5  # Limit to 5 results
-
-        # Execute the node search
-        node_search_results = await graphiti._search(
-            query='California Governor',
-            config=node_search_config,
-            group_ids=[scenario],
-        )
-
-        # Print node search results
-        print('\nNode Search Results:')
-        for node in node_search_results.nodes:
-            print(f'Node UUID: {node.uuid}')
-            print(f'Node Name: {node.name}')
-            node_summary = node.summary[:100] + '...' if len(node.summary) > 100 else node.summary
-            print(f'Content Summary: {node_summary}')
-            print(f'Node Labels: {", ".join(node.labels)}')
-            print(f'Created At: {node.created_at}')
-            if hasattr(node, 'attributes') and node.attributes:
-                print('Attributes:')
-                for key, value in node.attributes.items():
-                    print(f'  {key}: {value}')
-            print('---')
-
+        results_str = await perform_query_collect_results(graphiti, search_queries, scenario)
+        print(results_str)
     finally:
         #################################################
         # CLEANUP
