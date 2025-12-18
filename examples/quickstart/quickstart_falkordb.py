@@ -566,22 +566,22 @@ SCENARIOS = {
         # 'excluded_entity_types': ['Entity'],  # Skip generic entities like "house", "sky"
         'episodes': parse_file_pattern_to_episodes("examples/quickstart/know-ai", "Allen_Holub_*.txt"),
     },
-    'ssi_schaefer': {
-        'name': 'SSI Schaefer',
-        'description': "SSI Schaefer",
-        'search_queries': [
-            'What is SSI Schaefer?',
-        ],
-        'episodes': parse_files_to_episodes(
-            "/Users/christian.gintenreiter/dev/Workspace-INTERNAL/split-data-agentspace/case-0-patient-zero-data/auto-eval/scenarios/patient-zero-schaefer/UseCase-0-SSI-Schaefer-addon-TXT", 
-            [
-                "client_team_md.txt",
-                "DATA_SCHEMA_DOCUMENTATION_md.txt",
-                "glossary_consolidated.md.txt",
-                "SCHAEFERSHOP_CLIENT_PROFILE_md.txt",
-                "smec_Organigram_curated_md.txt",
-            ]),
-    }
+    # 'ssi_schaefer': {
+    #     'name': 'SSI Schaefer',
+    #     'description': "SSI Schaefer",
+    #     'search_queries': [
+    #         'What is SSI Schaefer?',
+    #     ],
+    #     'episodes': parse_files_to_episodes(
+    #         "/Users/christian.gintenreiter/dev/Workspace-INTERNAL/split-data-agentspace/case-0-patient-zero-data/auto-eval/scenarios/patient-zero-schaefer/UseCase-0-SSI-Schaefer-addon-TXT", 
+    #         [
+    #             "client_team_md.txt",
+    #             "DATA_SCHEMA_DOCUMENTATION_md.txt",
+    #             "glossary_consolidated.md.txt",
+    #             "SCHAEFERSHOP_CLIENT_PROFILE_md.txt",
+    #             "smec_Organigram_curated_md.txt",
+    #         ]),
+    # }
 }
 
 
