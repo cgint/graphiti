@@ -85,6 +85,7 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S',
 )
 logger = logging.getLogger(__name__)
+logging.getLogger('google_genai').setLevel(logging.WARNING)  # Silence noisy Google AI logs
 
 load_dotenv()
 
