@@ -60,9 +60,11 @@ from google.genai import types
 from pydantic import BaseModel, Field
 
 from graphiti_core import Graphiti
+from graphiti_core.prompts.models import Message
 from graphiti_core.cross_encoder.gemini_reranker_client import GeminiRerankerClient
 from graphiti_core.driver.falkordb_driver import FalkorDriver
 from graphiti_core.embedder.gemini import GeminiEmbedder, GeminiEmbedderConfig
+from graphiti_core.llm_client import LLMClient
 from graphiti_core.llm_client.gemini_client import GeminiClient, LLMConfig
 from graphiti_core.nodes import EpisodeType, EpisodicNode
 from graphiti_core.search import search_config_recipes
@@ -757,7 +759,7 @@ async def export_graph_data(graphiti: Graphiti, scenario: str):
     print(f"Summary: {len(all_nodes)} nodes, {len(all_edges)} edges")
 
 
-async def perform_query_collect_results(graphiti: Graphiti, search_queries: list[str], scenario: str) -> str:
+async def perform_query_collect_results(graphiti: Graphiti, search_query: str, scenario: str) -> str:
     output = []
 
     #################################################
@@ -771,17 +773,65 @@ async def perform_query_collect_results(graphiti: Graphiti, search_queries: list
 
     # Perform a hybrid search combining semantic similarity and BM25 retrieval
     # Use group_ids to scope search to the current scenario's database
-    for search_query in search_queries:
-        output.append(f"\nSearching for: '{search_query}'")
-        results = await graphiti.search(search_query, group_ids=[scenario])
-        results_search = await graphiti.search_(search_query, group_ids=[scenario])
+    output.append(f"\nSearching for: '{search_query}'")
+    results = await graphiti.search(search_query, group_ids=[scenario])
+    results_search = await graphiti.search_(search_query, group_ids=[scenario])
 
-        # Print search results with traceability and temporal information
-        output.append('\nSearch Results as text:')
-        pretty_results = search_results_to_context_string(results_search)
-        output.append(pretty_results)
-        output.append('\n\nSearch Results:')
-        for result in results:
+    # Print search results with traceability and temporal information
+    output.append('\nSearch Results as text:')
+    pretty_results = search_results_to_context_string(results_search)
+    output.append(pretty_results)
+    output.append('\n\nSearch Results:')
+    for result in results:
+        output.append(f'UUID: {result.uuid}')
+        output.append(f'Fact: {result.fact}')
+        
+        # Temporal information
+        if hasattr(result, 'valid_at') and result.valid_at:
+            output.append(f'Valid from: {result.valid_at}')
+        if hasattr(result, 'invalid_at') and result.invalid_at:
+            output.append(f'Valid until: {result.invalid_at}')
+        
+        # Traceability: Show source episodes
+        if hasattr(result, 'episodes') and result.episodes:
+            output.append(f'Source Episodes: {len(result.episodes)} episode(s)')
+            for episode_uuid in result.episodes:
+                try:
+                    episode = await EpisodicNode.get_by_uuid(graphiti.driver, episode_uuid)
+                    output.append(f'  - Episode: {episode.name}')
+                    output.append(f'    Content preview: {episode.content[:80]}...')
+                    output.append(f'    Valid at: {episode.valid_at}')
+                    output.append(f'    Source: {episode.source_description}')
+                except Exception as e:
+                    output.append(f'  - Episode UUID: {episode_uuid} (could not retrieve: {e})')
+        else:
+            output.append('Source Episodes: None')
+        
+        output.append('---')
+
+    #################################################
+    # CENTER NODE SEARCH
+    #################################################
+    # For more contextually relevant results, you can
+    # use a center node to rerank search results based
+    # on their graph distance to a specific node
+    #################################################
+
+    # Use the top search result's UUID as the center node for reranking
+    if results and len(results) > 0:
+        # Get the source node UUID from the top result
+        center_node_uuid = results[0].source_node_uuid
+
+        output.append('\nReranking search results based on graph distance:')
+        output.append(f'Using center node UUID: {center_node_uuid}')
+
+        reranked_results = await graphiti.search(
+            search_query, center_node_uuid=center_node_uuid, group_ids=[scenario]
+        )
+
+        # Print reranked search results with traceability
+        output.append('\nReranked Search Results:')
+        for result in reranked_results:
             output.append(f'UUID: {result.uuid}')
             output.append(f'Fact: {result.fact}')
             
@@ -794,67 +844,18 @@ async def perform_query_collect_results(graphiti: Graphiti, search_queries: list
             # Traceability: Show source episodes
             if hasattr(result, 'episodes') and result.episodes:
                 output.append(f'Source Episodes: {len(result.episodes)} episode(s)')
-                for episode_uuid in result.episodes:
+                for episode_uuid in result.episodes[:2]:  # Show first 2 to avoid clutter
                     try:
                         episode = await EpisodicNode.get_by_uuid(graphiti.driver, episode_uuid)
-                        output.append(f'  - Episode: {episode.name}')
-                        output.append(f'    Content preview: {episode.content[:80]}...')
-                        output.append(f'    Valid at: {episode.valid_at}')
-                        output.append(f'    Source: {episode.source_description}')
-                    except Exception as e:
-                        output.append(f'  - Episode UUID: {episode_uuid} (could not retrieve: {e})')
-            else:
-                output.append('Source Episodes: None')
+                        output.append(f'  - Episode: {episode.name} (valid at: {episode.valid_at})')
+                    except Exception:
+                        output.append(f'  - Episode UUID: {episode_uuid}')
+                if len(result.episodes) > 2:
+                    output.append(f'  ... and {len(result.episodes) - 2} more episode(s)')
             
             output.append('---')
-
-        #################################################
-        # CENTER NODE SEARCH
-        #################################################
-        # For more contextually relevant results, you can
-        # use a center node to rerank search results based
-        # on their graph distance to a specific node
-        #################################################
-
-        # Use the top search result's UUID as the center node for reranking
-        if results and len(results) > 0:
-            # Get the source node UUID from the top result
-            center_node_uuid = results[0].source_node_uuid
-
-            output.append('\nReranking search results based on graph distance:')
-            output.append(f'Using center node UUID: {center_node_uuid}')
-
-            reranked_results = await graphiti.search(
-                search_query, center_node_uuid=center_node_uuid, group_ids=[scenario]
-            )
-
-            # Print reranked search results with traceability
-            output.append('\nReranked Search Results:')
-            for result in reranked_results:
-                output.append(f'UUID: {result.uuid}')
-                output.append(f'Fact: {result.fact}')
-                
-                # Temporal information
-                if hasattr(result, 'valid_at') and result.valid_at:
-                    output.append(f'Valid from: {result.valid_at}')
-                if hasattr(result, 'invalid_at') and result.invalid_at:
-                    output.append(f'Valid until: {result.invalid_at}')
-                
-                # Traceability: Show source episodes
-                if hasattr(result, 'episodes') and result.episodes:
-                    output.append(f'Source Episodes: {len(result.episodes)} episode(s)')
-                    for episode_uuid in result.episodes[:2]:  # Show first 2 to avoid clutter
-                        try:
-                            episode = await EpisodicNode.get_by_uuid(graphiti.driver, episode_uuid)
-                            output.append(f'  - Episode: {episode.name} (valid at: {episode.valid_at})')
-                        except Exception:
-                            output.append(f'  - Episode UUID: {episode_uuid}')
-                    if len(result.episodes) > 2:
-                        output.append(f'  ... and {len(result.episodes) - 2} more episode(s)')
-                
-                output.append('---')
-        else:
-            output.append('No results found in the initial search to use as center node.')
+    else:
+        output.append('No results found in the initial search to use as center node.')
 
     #################################################
     # NODE SEARCH USING SEARCH RECIPES
@@ -876,7 +877,7 @@ async def perform_query_collect_results(graphiti: Graphiti, search_queries: list
 
     # Execute the node search
     node_search_results = await graphiti._search(
-        query='California Governor',
+        query=search_query,
         config=node_search_config,
         group_ids=[scenario],
     )
@@ -898,6 +899,23 @@ async def perform_query_collect_results(graphiti: Graphiti, search_queries: list
 
     return "\n".join(output)
 
+async def create_answer_from_results(graphiti: Graphiti, result_str: str, query: str) -> str:
+    system_message = Message(
+        role='system',
+        content="You are a helpful assistant that can answer questions based on the given results."
+    )
+    user_message = Message(
+        role='user',
+        content=f"The results are: {result_str}. Answer the following question purely based on the results: {query}"
+    )
+    messages = [system_message, user_message]
+    llm: LLMClient = graphiti.llm_client
+    response = await llm.generate_response(
+        messages=messages,
+        response_model=None,
+    )
+    print(f" DEBUG: Full response: {json.dumps(response, indent=4)}")
+    return response['content']
 
 async def main(query_only: bool = False, clear: bool = False, export: bool = False, scenario: str = 'politics'):
     #################################################
@@ -1047,8 +1065,12 @@ async def main(query_only: bool = False, clear: bool = False, export: bool = Fal
             print('\nQuery-only mode: Skipping episode addition to preserve existing data')
 
         search_queries = selected_scenario['search_queries']
-        results_str = await perform_query_collect_results(graphiti, search_queries, scenario)
-        print(results_str)
+        for search_query in search_queries:
+            results_str = await perform_query_collect_results(graphiti, search_query, scenario)
+            # print(results_str)
+            print(f"\nNow answering question: {search_query}")
+            answer = await create_answer_from_results(graphiti, results_str, search_query)
+            print(f"\n\nAnswer: {answer}")
     finally:
         #################################################
         # CLEANUP
