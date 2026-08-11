@@ -17,6 +17,7 @@ limitations under the License.
 import asyncio
 import datetime
 import logging
+from contextlib import suppress
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -34,46 +35,56 @@ else:
         ) from None
 
 from graphiti_core.driver.driver import GraphDriver, GraphDriverSession, GraphProvider
+from graphiti_core.driver.falkordb.fulltext import (
+    build_falkor_fulltext_query,
+    sanitize_falkor_fulltext_query,
+)
+from graphiti_core.driver.falkordb.operations.community_edge_ops import (
+    FalkorCommunityEdgeOperations,
+)
+from graphiti_core.driver.falkordb.operations.community_node_ops import (
+    FalkorCommunityNodeOperations,
+)
+from graphiti_core.driver.falkordb.operations.entity_edge_ops import FalkorEntityEdgeOperations
+from graphiti_core.driver.falkordb.operations.entity_node_ops import FalkorEntityNodeOperations
+from graphiti_core.driver.falkordb.operations.episode_node_ops import FalkorEpisodeNodeOperations
+from graphiti_core.driver.falkordb.operations.episodic_edge_ops import FalkorEpisodicEdgeOperations
+from graphiti_core.driver.falkordb.operations.graph_ops import FalkorGraphMaintenanceOperations
+from graphiti_core.driver.falkordb.operations.has_episode_edge_ops import (
+    FalkorHasEpisodeEdgeOperations,
+)
+from graphiti_core.driver.falkordb.operations.next_episode_edge_ops import (
+    FalkorNextEpisodeEdgeOperations,
+)
+from graphiti_core.driver.falkordb.operations.saga_node_ops import FalkorSagaNodeOperations
+from graphiti_core.driver.falkordb.operations.search_ops import FalkorSearchOperations
+from graphiti_core.driver.operations.community_edge_ops import CommunityEdgeOperations
+from graphiti_core.driver.operations.community_node_ops import CommunityNodeOperations
+from graphiti_core.driver.operations.entity_edge_ops import EntityEdgeOperations
+from graphiti_core.driver.operations.entity_node_ops import EntityNodeOperations
+from graphiti_core.driver.operations.episode_node_ops import EpisodeNodeOperations
+from graphiti_core.driver.operations.episodic_edge_ops import EpisodicEdgeOperations
+from graphiti_core.driver.operations.graph_ops import GraphMaintenanceOperations
+from graphiti_core.driver.operations.has_episode_edge_ops import HasEpisodeEdgeOperations
+from graphiti_core.driver.operations.next_episode_edge_ops import NextEpisodeEdgeOperations
+from graphiti_core.driver.operations.saga_node_ops import SagaNodeOperations
+from graphiti_core.driver.operations.search_ops import SearchOperations
 from graphiti_core.graph_queries import get_fulltext_indices, get_range_indices
 from graphiti_core.utils.datetime_utils import convert_datetimes_to_strings
 
 logger = logging.getLogger(__name__)
 
-STOPWORDS = [
-    'a',
-    'is',
-    'the',
-    'an',
-    'and',
-    'are',
-    'as',
-    'at',
-    'be',
-    'but',
-    'by',
-    'for',
-    'if',
-    'in',
-    'into',
-    'it',
-    'no',
-    'not',
-    'of',
-    'on',
-    'or',
-    'such',
-    'that',
-    'their',
-    'then',
-    'there',
-    'these',
-    'they',
-    'this',
-    'to',
-    'was',
-    'will',
-    'with',
-]
+
+def _strip_nul_bytes(value: Any) -> Any:
+    if isinstance(value, str):
+        return value.replace('\x00', '')
+    if isinstance(value, dict):
+        return {key: _strip_nul_bytes(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_strip_nul_bytes(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_strip_nul_bytes(item) for item in value)
+    return value
 
 
 class FalkorDriverSession(GraphDriverSession):
@@ -102,10 +113,12 @@ class FalkorDriverSession(GraphDriverSession):
         if isinstance(query, list):
             for cypher, params in query:
                 params = convert_datetimes_to_strings(params)
+                params = _strip_nul_bytes(params)
                 await self.graph.query(str(cypher), params)  # type: ignore[reportUnknownArgumentType]
         else:
             params = dict(kwargs)
             params = convert_datetimes_to_strings(params)
+            params = _strip_nul_bytes(params)
             await self.graph.query(str(query), params)  # type: ignore[reportUnknownArgumentType]
         # Assuming `graph.query` is async (ideal); otherwise, wrap in executor
         return None
@@ -113,7 +126,7 @@ class FalkorDriverSession(GraphDriverSession):
 
 class FalkorDriver(GraphDriver):
     provider = GraphProvider.FALKORDB
-    default_group_id: str = '\\_'
+    default_group_id: str = '_'
     fulltext_syntax: str = '@'  # FalkorDB uses a redisearch-like syntax for fulltext queries
     aoss_client: None = None
 
@@ -149,15 +162,67 @@ class FalkorDriver(GraphDriver):
         else:
             self.client = FalkorDB(host=host, port=port, username=username, password=password)
 
-        # Schedule the indices and constraints to be built
-        # try:
-        #     # Try to get the current event loop
-        #     loop = asyncio.get_running_loop()
-        #     # Schedule the build_indices_and_constraints to run
-        #     loop.create_task(self.build_indices_and_constraints())
-        # except RuntimeError:
-        #     # No event loop running, this will be handled later
-        #     pass
+        # Instantiate FalkorDB operations
+        self._entity_node_ops = FalkorEntityNodeOperations()
+        self._episode_node_ops = FalkorEpisodeNodeOperations()
+        self._community_node_ops = FalkorCommunityNodeOperations()
+        self._saga_node_ops = FalkorSagaNodeOperations()
+        self._entity_edge_ops = FalkorEntityEdgeOperations()
+        self._episodic_edge_ops = FalkorEpisodicEdgeOperations()
+        self._community_edge_ops = FalkorCommunityEdgeOperations()
+        self._has_episode_edge_ops = FalkorHasEpisodeEdgeOperations()
+        self._next_episode_edge_ops = FalkorNextEpisodeEdgeOperations()
+        self._search_ops = FalkorSearchOperations()
+        self._graph_ops = FalkorGraphMaintenanceOperations()
+
+        # Indices are built explicitly by the caller so database selection completes first.
+        self._init_task: asyncio.Task | None = None
+
+    # --- Operations properties ---
+
+    @property
+    def entity_node_ops(self) -> EntityNodeOperations:
+        return self._entity_node_ops
+
+    @property
+    def episode_node_ops(self) -> EpisodeNodeOperations:
+        return self._episode_node_ops
+
+    @property
+    def community_node_ops(self) -> CommunityNodeOperations:
+        return self._community_node_ops
+
+    @property
+    def saga_node_ops(self) -> SagaNodeOperations:
+        return self._saga_node_ops
+
+    @property
+    def entity_edge_ops(self) -> EntityEdgeOperations:
+        return self._entity_edge_ops
+
+    @property
+    def episodic_edge_ops(self) -> EpisodicEdgeOperations:
+        return self._episodic_edge_ops
+
+    @property
+    def community_edge_ops(self) -> CommunityEdgeOperations:
+        return self._community_edge_ops
+
+    @property
+    def has_episode_edge_ops(self) -> HasEpisodeEdgeOperations:
+        return self._has_episode_edge_ops
+
+    @property
+    def next_episode_edge_ops(self) -> NextEpisodeEdgeOperations:
+        return self._next_episode_edge_ops
+
+    @property
+    def search_ops(self) -> SearchOperations:
+        return self._search_ops
+
+    @property
+    def graph_ops(self) -> GraphMaintenanceOperations:
+        return self._graph_ops
 
     def _get_graph(self, graph_name: str | None) -> FalkorGraph:
         # FalkorDB requires a non-None database name for multi-tenant graphs; the default is "default_db"
@@ -170,6 +235,7 @@ class FalkorDriver(GraphDriver):
 
         # Convert datetime objects to ISO strings (FalkorDB does not support datetime objects directly)
         params = convert_datetimes_to_strings(dict(kwargs))
+        params = _strip_nul_bytes(params)
 
         try:
             result = await graph.query(cypher_query_, params)  # type: ignore[reportUnknownArgumentType]
@@ -203,6 +269,14 @@ class FalkorDriver(GraphDriver):
 
     async def close(self) -> None:
         """Close the driver connection."""
+        if self._init_task is not None:
+            if not self._init_task.done():
+                self._init_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await self._init_task
+            elif not self._init_task.cancelled():
+                # Retrieve any exception so it doesn't go unobserved
+                self._init_task.exception()
         if hasattr(self.client, 'aclose'):
             await self.client.aclose()  # type: ignore[reportUnknownMemberType]
         elif hasattr(self.client.connection, 'aclose'):
@@ -243,22 +317,14 @@ class FalkorDriver(GraphDriver):
             await asyncio.gather(*drop_tasks)
 
     async def has_required_indices(self) -> bool:
-        """Check if the required fulltext indices exist.
-
-        Returns True if all required indices (Entity, Episodic, RELATES_TO) exist,
-        False otherwise. This is a lightweight check to avoid unnecessary
-        index creation calls.
-        """
+        """Check that the fulltext indices required for search exist."""
         result = await self.execute_query('CALL db.indexes()')
         if not result:
             return False
 
         records, _, _ = result
         existing_labels = {record['label'] for record in records}
-
-        # Check for the key fulltext indices we need for search
-        required_labels = {'Entity', 'Episodic', 'RELATES_TO'}
-        return required_labels.issubset(existing_labels)
+        return {'Entity', 'Episodic', 'RELATES_TO'}.issubset(existing_labels)
 
     async def build_indices_and_constraints(self, delete_existing=False):
         if delete_existing:
@@ -305,99 +371,10 @@ class FalkorDriver(GraphDriver):
             return obj
 
     def sanitize(self, query: str) -> str:
-        """
-        Replace special characters with whitespace for RediSearch fulltext queries.
-        Handles both ASCII punctuation (FalkorDB tokenization rules) and common
-        Unicode typographic characters from documents/PDFs.
-        """
-        separator_map = str.maketrans(
-            {
-                # ASCII punctuation (FalkorDB tokenization rules)
-                ',': ' ',
-                '.': ' ',
-                '<': ' ',
-                '>': ' ',
-                '{': ' ',
-                '}': ' ',
-                '[': ' ',
-                ']': ' ',
-                '"': ' ',
-                "'": ' ',
-                ':': ' ',
-                ';': ' ',
-                '!': ' ',
-                '@': ' ',
-                '#': ' ',
-                '$': ' ',
-                '%': ' ',
-                '^': ' ',
-                '&': ' ',
-                '*': ' ',
-                '(': ' ',
-                ')': ' ',
-                '-': ' ',
-                '+': ' ',
-                '=': ' ',
-                '~': ' ',
-                '?': ' ',
-                '/': ' ',
-                '\\': ' ',
-                # Unicode typographic characters (common in PDFs/documents)
-                '\u2013': ' ',  # en-dash –
-                '\u2014': ' ',  # em-dash —
-                '\u201c': ' ',  # left double quote "
-                '\u201d': ' ',  # right double quote "
-                '\u2018': ' ',  # left single quote '
-                '\u2019': ' ',  # right single quote '
-                '\u2026': ' ',  # ellipsis …
-                '\u2022': ' ',  # bullet •
-                '\u00b7': ' ',  # middle dot ·
-                '\u00ab': ' ',  # left guillemet «
-                '\u00bb': ' ',  # right guillemet »
-            }
-        )
-        sanitized = query.translate(separator_map)
-        # Clean up multiple spaces
-        sanitized = ' '.join(sanitized.split())
-        return sanitized
+        """Replace FalkorDB special characters with whitespace."""
+        return sanitize_falkor_fulltext_query(query)
 
     def build_fulltext_query(
         self, query: str, group_ids: list[str] | None = None, max_query_length: int = 128
     ) -> str:
-        """
-        Build a fulltext query string for FalkorDB using RedisSearch syntax.
-        FalkorDB uses RedisSearch-like syntax where:
-        - Field queries use @ prefix: @field:value
-        - Multiple values for same field: (@field:value1|value2)
-        - Text search doesn't need @ prefix for content fields
-        - AND is implicit with space: (@group_id:value) (text)
-        - OR uses pipe within parentheses: (@group_id:value1|value2)
-        """
-        if group_ids is None or len(group_ids) == 0:
-            group_filter = ''
-        else:
-            group_values = '|'.join(group_ids)
-            group_filter = f'(@group_id:{group_values})'
-
-        sanitized_query = self.sanitize(query)
-
-        # Keep only meaningful words: must contain alphanumeric chars and not be a stopword
-        query_words = sanitized_query.split()
-        filtered_words = [
-            word for word in query_words
-            if any(c.isalnum() for c in word) and word.lower() not in STOPWORDS
-        ]
-
-        # No meaningful words to search for
-        if not filtered_words:
-            return ''
-
-        sanitized_query = ' | '.join(filtered_words)
-
-        # If the query is too long return no query
-        if len(sanitized_query.split(' ')) + len(group_ids or '') >= max_query_length:
-            return ''
-
-        full_query = group_filter + ' (' + sanitized_query + ')'
-
-        return full_query
+        return build_falkor_fulltext_query(query, group_ids, max_query_length)

@@ -18,14 +18,19 @@ from .client import LLMClient
 from .config import LLMConfig
 from .errors import RateLimitError
 from .openai_client import OpenAIClient
+from .token_tracker import TokenUsage, TokenUsageTracker
 
-# Optional DSPy client - import only if dspy is available
 try:
     from .dspy_client import DSPyClient
-
-    _DSPY_AVAILABLE = True
 except ImportError:
     DSPyClient = None  # type: ignore[misc, assignment]
-    _DSPY_AVAILABLE = False
 
-__all__ = ['LLMClient', 'OpenAIClient', 'LLMConfig', 'RateLimitError', 'DSPyClient']
+__all__ = [
+    'LLMClient',
+    'OpenAIClient',
+    'LLMConfig',
+    'RateLimitError',
+    'TokenUsage',
+    'TokenUsageTracker',
+    'DSPyClient',
+]
